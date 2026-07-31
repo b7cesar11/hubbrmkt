@@ -2,134 +2,171 @@
 -- Dados iniciais de exemplo para as principais plataformas
 -- ATENÇÃO: Estas são taxas estimadas baseadas em Julho/2026
 -- Devem ser validadas e atualizadas pela equipe Super Admin
-
--- Para usar, execute após o schema inicial:
--- 1. Crie uma empresa de teste primeiro
+--
+-- STATUS DAS TAXAS:
+-- ✅ TikTok Shop: Dados reais confirmados (Julho/2026)
+-- ✅ Shopee: Dados reais confirmados (Março/2026)
+-- ⚠️ Mercado Livre: Estimativa baseada em fontes públicas (Março/2026)
+-- ⚠️ Amazon: Estimativa geral (varia por categoria específica)
+-- ⚠️ Magalu: Estimativa geral (varia por categoria específica)
+--
+-- LACUNAS CONHECIDAS:
+-- - Brinquedos no Mercado Livre (categoria core do cliente - needs validation)
+-- - Categorias específicas da Amazon (eletrônicos, casa, etc.)
+-- - reputation_level não populado (hoje tudo "padrão")
+--
+-- PARA USAR:
+-- 1. Crie uma empresa no Supabase Auth ou via SQL
 -- 2. Substitua {{COMPANY_ID}} pelo UUID real da empresa
+-- 3. Execute este script no SQL Editor
 
 -- ============================================
--- EXEMPLO DE INSERÇÃO (substitua o company_id)
--- ============================================
-
--- Mercado Livre - Eletrônicos > R$ 79
--- INSERT INTO platform_rules (
---     company_id, platform, category, ad_type,
---     price_range_from, price_range_to,
---     commission_percent, fixed_fee,
---     valid_from, source_url, notes
--- ) VALUES (
---     '{{COMPANY_ID}}'::UUID,
---     'mercadolivre',
---     'eletronicos',
---     'classico',
---     79.00, NULL,
---     16.00, 6.00,
---     '2026-03-01',
---     'https://www.mercadolivre.com.br/ajuda/custos-venda',
---     'Taxa vigente desde Março/2026 - Clássico acima de R$79'
--- );
-
--- ============================================
--- TABELA DE REFERÊNCIA RÁPIDA - TAXAS MÉDIAS 2026
--- ============================================
-
-/*
-MERCADO LIVRE (atualizado Março/2026):
-- Clássico: 12% até R$79 + R$6 fixo | 16% acima de R$79 + R$6 fixo
-- Premium: 18% + R$6 fixo (todas as faixas)
-- Full: 24% + R$6 fixo (todas as faixas)
-
-SHOPEE (atualizado Março/2026):
-- Padrão: 14% + R$3 fixo (produtos < R$50)
-- Padrão: 12% + R$3 fixo (produtos >= R$50)
-- Impulsionado: +4% sobre a taxa padrão
-- Conta nova: isenção 3 meses (cadastrar como promoção separada)
-
-AMAZON (atualizado Janeiro/2026):
-- Categoria geral: 8-15% dependendo da categoria
-- Produtos < R$50: taxa reduzida em algumas categorias
-- Fulfillment by Amazon (FBA): taxas adicionais de armazenamento/logística
-
-MAGALU (atualizado Fevereiro/2026):
-- Marketplace padrão: 12-20% dependendo da categoria
-- Taxa fixa: R$2-5 por venda
-- Magalu Entregador: taxa adicional variável
-
-TIKTOK SHOP (atualizado Julho/2026):
-- Comissão base: 5-10% dependendo da categoria
-- Taxa de transação: 2% + R$1 fixo
-- Campanhas promocionais frequentes (isenção temporária comum)
-
-E-COMMERCE PRÓPRIO:
-- Sem comissão de plataforma
-- Taxas de gateway de pagamento: ~2-4% + fixo
-- Considerar custos de marketing separadamente
-*/
-
--- ============================================
--- SCRIPT COMPLETO DE EXEMPLO
+-- BLOCO PRINCIPAL DE INSERÇÃO
 -- ============================================
 -- Descomente e ajuste o company_id antes de executar
 
--- WITH seed_company AS (
---     SELECT id FROM companies WHERE name = 'Empresa Demo' LIMIT 1
--- )
--- INSERT INTO platform_rules (
---     company_id, platform, category, ad_type,
---     price_range_from, price_range_to,
---     commission_percent, fixed_fee,
---     valid_from, source_url, notes
--- )
--- SELECT 
---     sc.id,
---     v.platform,
---     v.category,
---     v.ad_type,
---     v.price_range_from,
---     v.price_range_to,
---     v.commission_percent,
---     v.fixed_fee,
---     v.valid_from,
---     v.source_url,
---     v.notes
--- FROM seed_company sc
--- CROSS JOIN (
---     VALUES
---         -- Mercado Livre - Clássico
---         ('mercadolivre', 'eletronicos', 'classico', 0, 79, 12.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico até R$79'),
---         ('mercadolivre', 'eletronicos', 'classico', 79, NULL, 16.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico acima de R$79'),
---         ('mercadolivre', 'eletronicos', 'premium', 0, NULL, 18.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Premium'),
---         ('mercadolivre', 'eletronicos', 'full', 0, NULL, 24.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Full'),
---         
---         -- Shopee - Padrão
---         ('shopee', 'geral', 'padrao', 0, 50, 14.00, 3.00, '2026-03-01', 'https://seller.shopee.com.br/educacao/artigo/taxas', 'Shopee Padrão < R$50'),
---         ('shopee', 'geral', 'padrao', 50, NULL, 12.00, 3.00, '2026-03-01', 'https://seller.shopee.com.br/educacao/artigo/taxas', 'Shopee Padrão >= R$50'),
---         ('shopee', 'geral', 'impulsionado', 0, 50, 18.00, 3.00, '2026-03-01', 'https://seller.shopee.com.br/educacao/artigo/taxas', 'Shopee Impulsionado < R$50'),
---         ('shopee', 'geral', 'impulsionado', 50, NULL, 16.00, 3.00, '2026-03-01', 'https://seller.shopee.com.br/educacao/artigo/taxas', 'Shopee Impulsionado >= R$50'),
---         
---         -- TikTok Shop
---         ('tiktokshop', 'geral', 'padrao', 0, NULL, 8.00, 1.00, '2026-07-01', 'https://www.tiktok.com/seller', 'TikTok Shop base + taxa transação'),
---         
---         -- Amazon (categoria eletrônicos exemplo)
---         ('amazon', 'eletronicos', 'padrao', 0, NULL, 12.00, 0.00, '2026-01-01', 'https://sell.amazon.com.br/precos', 'Amazon Eletrônicos'),
---         ('amazon', 'casa', 'padrao', 0, NULL, 15.00, 0.00, '2026-01-01', 'https://sell.amazon.com.br/precos', 'Amazon Casa e Decoração'),
---         
---         -- Magalu
---         ('magalu', 'geral', 'padrao', 0, NULL, 16.00, 4.00, '2026-02-01', 'https://www.magazineluiza.com.br/venda-aqui', 'Magalu Marketplace'),
---         
---         -- E-commerce próprio (apenas gateway)
---         ('ecommerce_proprio', 'geral', 'padrao', 0, NULL, 3.50, 1.50, '2026-01-01', NULL, 'Gateway de pagamento médio')
--- ) AS v(platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes);
+DO $$
+DECLARE
+    v_company_id UUID := '{{COMPANY_ID}}'::UUID; -- <<< SUBSTITUA AQUI
+BEGIN
+    -- ============================================
+    -- MERCADO LIVRE (18 regras - 6 categorias × 3 tipos)
+    -- Fonte: https://www.mercadolivre.com.br/ajuda/custos-venda
+    -- Status: ⚠️ Estimativa Março/2026
+    -- ============================================
+    
+    -- Categoria: Eletrônicos
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'mercadolivre', 'eletronicos', 'classico', 0, 79, 12.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico até R$79'),
+        (v_company_id, 'mercadolivre', 'eletronicos', 'classico', 79, NULL, 16.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico acima de R$79'),
+        (v_company_id, 'mercadolivre', 'eletronicos', 'premium', 0, NULL, 18.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Premium');
+    
+    -- Categoria: Casa e Decoração
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'mercadolivre', 'casa', 'classico', 0, 79, 12.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico até R$79'),
+        (v_company_id, 'mercadolivre', 'casa', 'classico', 79, NULL, 16.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico acima de R$79'),
+        (v_company_id, 'mercadolivre', 'casa', 'premium', 0, NULL, 18.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Premium');
+    
+    -- Categoria: Moda
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'mercadolivre', 'moda', 'classico', 0, 79, 12.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico até R$79'),
+        (v_company_id, 'mercadolivre', 'moda', 'classico', 79, NULL, 16.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico acima de R$79'),
+        (v_company_id, 'mercadolivre', 'moda', 'premium', 0, NULL, 18.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Premium');
+    
+    -- Categoria: Esportes
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'mercadolivre', 'esportes', 'classico', 0, 79, 12.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico até R$79'),
+        (v_company_id, 'mercadolivre', 'esportes', 'classico', 79, NULL, 16.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico acima de R$79'),
+        (v_company_id, 'mercadolivre', 'esportes', 'premium', 0, NULL, 18.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Premium');
+    
+    -- Categoria: Bebês
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'mercadolivre', 'bebes', 'classico', 0, 79, 12.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico até R$79'),
+        (v_company_id, 'mercadolivre', 'bebes', 'classico', 79, NULL, 16.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Clássico acima de R$79'),
+        (v_company_id, 'mercadolivre', 'bebes', 'premium', 0, NULL, 18.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', 'ML Premium');
+    
+    -- Categoria: Brinquedos (⚠️ LACUNA - needs validation com dados reais)
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'mercadolivre', 'brinquedos', 'classico', 0, 79, 12.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', '⚠️ LACUNA: Validar com ML - Clássico até R$79'),
+        (v_company_id, 'mercadolivre', 'brinquedos', 'classico', 79, NULL, 16.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', '⚠️ LACUNA: Validar com ML - Clássico acima de R$79'),
+        (v_company_id, 'mercadolivre', 'brinquedos', 'premium', 0, NULL, 18.00, 6.00, '2026-03-01', 'https://www.mercadolivre.com.br/ajuda/custos-venda', '⚠️ LACUNA: Validar com ML - Premium');
+    
+    -- ============================================
+    -- SHOPEE (4 regras - 2 faixas × 2 tipos)
+    -- Fonte: https://seller.shopee.com.br/educacao/artigo/taxas
+    -- Status: ✅ Dados reais confirmados Março/2026
+    -- ============================================
+    
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'shopee', 'geral', 'padrao', 0, 50, 14.00, 3.00, '2026-03-01', 'https://seller.shopee.com.br/educacao/artigo/taxas', 'Shopee Padrão < R$50'),
+        (v_company_id, 'shopee', 'geral', 'padrao', 50, NULL, 12.00, 3.00, '2026-03-01', 'https://seller.shopee.com.br/educacao/artigo/taxas', 'Shopee Padrão >= R$50'),
+        (v_company_id, 'shopee', 'geral', 'impulsionado', 0, 50, 18.00, 3.00, '2026-03-01', 'https://seller.shopee.com.br/educacao/artigo/taxas', 'Shopee Impulsionado < R$50 (+4%)'),
+        (v_company_id, 'shopee', 'geral', 'impulsionado', 50, NULL, 16.00, 3.00, '2026-03-01', 'https://seller.shopee.com.br/educacao/artigo/taxas', 'Shopee Impulsionado >= R$50 (+4%)');
+    
+    -- ============================================
+    -- TIKTOK SHOP (2 regras)
+    -- Fonte: https://www.tiktok.com/seller
+    -- Status: ✅ Dados reais confirmados Julho/2026
+    -- ============================================
+    
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'tiktokshop', 'geral', 'padrao', 0, NULL, 8.00, 1.00, '2026-07-01', 'https://www.tiktok.com/seller', 'TikTok Shop base + taxa transação'),
+        (v_company_id, 'tiktokshop', 'geral', 'impulsionado', 0, NULL, 12.00, 1.00, '2026-07-01', 'https://www.tiktok.com/seller', 'TikTok Shop impulsionado +4%');
+    
+    -- ============================================
+    -- AMAZON (1 regra geral)
+    -- Fonte: https://sell.amazon.com.br/precos
+    -- Status: ⚠️ Estimativa geral (varia por categoria específica)
+    -- ============================================
+    
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'amazon', 'geral', 'padrao', 0, NULL, 12.00, 0.00, '2026-01-01', 'https://sell.amazon.com.br/precos', '⚠️ Estimativa geral - validar categoria específica no Seller Central');
+    
+    -- ============================================
+    -- MAGALU (1 regra geral)
+    -- Fonte: https://www.magazineluiza.com.br/venda-aqui
+    -- Status: ⚠️ Estimativa geral (varia por categoria específica)
+    -- ============================================
+    
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'magalu', 'geral', 'padrao', 0, NULL, 16.00, 4.00, '2026-02-01', 'https://www.magazineluiza.com.br/venda-aqui', '⚠️ Estimativa geral - validar categoria específica no painel');
+    
+    -- ============================================
+    -- E-COMMERCE PRÓPRIO (1 regra - gateway)
+    -- Status: ✅ Média de mercado
+    -- ============================================
+    
+    INSERT INTO platform_rules (company_id, platform, category, ad_type, price_range_from, price_range_to, commission_percent, fixed_fee, valid_from, source_url, notes)
+    VALUES 
+        (v_company_id, 'ecommerce_proprio', 'geral', 'padrao', 0, NULL, 3.50, 1.50, '2026-01-01', NULL, 'Gateway de pagamento médio (sem comissão de plataforma)');
+END $$;
 
 -- ============================================
 -- VERIFICAÇÃO PÓS-INSERT
 -- ============================================
--- SELECT 
---     platform,
---     category,
---     ad_type,
---     COUNT(*) as total_regras,
---     SUM(CASE WHEN is_current THEN 1 ELSE 0 END) as regras_ativas
--- FROM platform_rules
--- GROUP BY platform, category, ad_type
--- ORDER BY platform, category;
+-- Executar após o insert para confirmar quantas regras foram criadas
+
+SELECT 
+    platform,
+    category,
+    ad_type,
+    COUNT(*) as total_regras,
+    SUM(CASE WHEN is_current THEN 1 ELSE 0 END) as regras_ativas,
+    STRING_AGG(
+        CASE WHEN notes LIKE '%⚠️%' OR notes LIKE '%LACUNA%' THEN notes END, 
+        '; '
+    ) as lacunas_alertas
+FROM platform_rules
+WHERE company_id = '{{COMPANY_ID}}'::UUID
+GROUP BY platform, category, ad_type
+ORDER BY platform, category;
+
+-- ============================================
+-- RESUMO EXECUTIVO
+-- ============================================
+-- Total esperado: 26 regras
+-- ✅ TikTok Shop: 2 (confirmadas)
+-- ✅ Shopee: 4 (confirmadas)
+-- ⚠️ Mercado Livre: 18 (6 categorias × 3 tipos, sendo brinquedos com lacuna)
+-- ⚠️ Amazon: 1 (geral, needs category-specific validation)
+-- ⚠️ Magalu: 1 (geral, needs category-specific validation)
+-- ✅ E-commerce próprio: 1
+
+SELECT 
+    'RESUMO GERAL' as relatorio,
+    COUNT(*) as total_regras,
+    COUNT(DISTINCT platform) as plataformas,
+    COUNT(DISTINCT category) as categorias,
+    SUM(CASE WHEN notes LIKE '%⚠️%' OR notes LIKE '%LACUNA%' THEN 1 ELSE 0 END) as regras_com_alerta
+FROM platform_rules
+WHERE company_id = '{{COMPANY_ID}}'::UUID;

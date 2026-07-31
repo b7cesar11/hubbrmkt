@@ -6,6 +6,40 @@ O schema multi-tenant versionado está completo e pronto para deploy no Supabase
 
 ---
 
+## Resumo Executivo
+
+**Status:** Schema multi-tenant versionado pronto + seed de regras base documentado ✅
+
+### O que está entregue:
+
+| Arquivo | Descrição | Status |
+|---------|-----------|--------|
+| `/workspace/schema.sql` | Schema completo (497 linhas) | ✅ Pronto |
+| `/workspace/supabase/migrations/001_initial_schema.sql` | Copia do schema para migração | ✅ Pronto |
+| `/workspace/supabase/migrations/002_seed_regras_base.sql` | Seed com 26 regras + status + lacunas | ✅ Pronto |
+| `/workspace/docs/IMPLEMENTACAO.md` | Guia passo a passo | ✅ Atualizado |
+| `/workspace/README.md` | Visão geral do projeto | ✅ Atualizado |
+
+### Regras de Taxa Cadastradas:
+
+| Plataforma | Total | Confirmadas | Estimadas | Lacunas |
+|------------|-------|-------------|-----------|---------|
+| TikTok Shop | 2 | ✅ 2 | 0 | 0 |
+| Shopee | 4 | ✅ 4 | 0 | 0 |
+| Mercado Livre | 18 | 0 | ⚠️ 18 | Brinquedos (core) |
+| Amazon | 1 | 0 | ⚠️ 1 | Todas categorias específicas |
+| Magalu | 1 | 0 | ⚠️ 1 | Todas categorias específicas |
+| **TOTAL** | **26** | **6** | **20** | **Ver acima** |
+
+### Lacunas Conhecidas (prioridade para validação):
+
+1. **Brinquedos no Mercado Livre** — Categoria core do cliente, needs validation urgente
+2. **Categorias específicas da Amazon** — Hoje só regra geral (12%), Seller Central tem detalhamento por categoria
+3. **Categorias específicas da Magalu** — Hoje só regra geral (16% + R$4), painel tem detalhamento
+4. **reputation_level** — Estrutura pronta mas não populada (hoje tudo "padrão")
+
+---
+
 ## Passo a Passo - Setup Inicial (30 minutos)
 
 ### 1. Criar Projeto Supabase (5 min)
@@ -37,33 +71,30 @@ O schema multi-tenant versionado está completo e pronto para deploy no Supabase
    - Seguir wizard de configuração do Google Cloud
 4. **Policies** → Confirmar que RLS está ativo nas tabelas
 
-### 4. Testar com Dados de Exemplo (10 min)
+### 4. Inserir Regras Base (5 min)
 
-Criar empresa e usuário de teste:
+**IMPORTANTE:** O seed de regras agora tem status documentado e lacunas conhecidas.
 
 ```sql
--- 1. Criar empresa demo
+-- 1. Criar empresa (se ainda não criou)
 INSERT INTO companies (name, cnpj, plan_type, max_skus)
 VALUES ('Empresa Demo LTDA', '00.000.000/0001-00', 'starter', 100)
 RETURNING id;
+-- >>> ANOTE O UUID RETORNADO <<<
 
--- 2. Criar usuário admin (substitua {{COMPANY_ID}} pelo UUID retornado acima)
--- NOTA: auth_id deve vir do Supabase Auth após login real
--- Para teste, crie um usuário via Authentication → Add User primeiro
--- Depois vincule:
-
-INSERT INTO users (auth_id, company_id, email, full_name, role)
-VALUES (
-    '{{AUTH_ID_DO_USUARIO}}'::UUID, -- Pegar do Supabase Auth
-    '{{COMPANY_ID}}'::UUID,
-    'admin@empresademo.com.br',
-    'Admin Demo',
-    'company_admin'
-);
-
--- 3. Inserir regras base (copiar do arquivo 002_seed_regras_base.sql)
--- Descomentar e ajustar o company_id antes de executar
+-- 2. Copiar o conteúdo de 002_seed_regras_base.sql
+-- 3. Substituir {{COMPANY_ID}} pelo UUID da empresa
+-- 4. Executar no SQL Editor
+-- 5. Verificar output: deve mostrar 26 regras criadas + alertas das lacunas
 ```
+
+**O que o script faz:**
+- ✅ TikTok Shop: 2 regras (confirmadas Julho/2026)
+- ✅ Shopee: 4 regras (confirmadas Março/2026)
+- ⚠️ Mercado Livre: 18 regras (estimadas, Brinquedos precisa validação)
+- ⚠️ Amazon: 1 regra geral (precisa validação por categoria)
+- ⚠️ Magalu: 1 regra geral (precisa validação por categoria)
+- ✅ E-commerce próprio: 1 regra (gateway)
 
 ### 5. Testar Cálculo de Margem (5 min)
 
@@ -152,6 +183,7 @@ WHERE mc.company_id = '{{COMPANY_ID}}'::UUID;
 
 ### Semana 1: Setup + Validação
 - [x] Schema criado
+- [x] Seed de regras base atualizado com status das taxas e lacunas conhecidas
 - [ ] Supabase configurado com dados reais do cliente
 - [ ] Validação dos cálculos com 10-20 SKUs reais
 
@@ -166,6 +198,7 @@ WHERE mc.company_id = '{{COMPANY_ID}}'::UUID;
 - [ ] Cliente cadastra produtos reais
 - [ ] Conferência de margens calculadas vs. realidade
 - [ ] Ajustes finos no motor de regras
+- [ ] Preencher lacunas: Brinquedos (ML), categorias Amazon/Magalu
 
 ---
 
