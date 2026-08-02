@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { Plus, Trash2, Package, TrendingUp, AlertCircle } from 'lucide-react'
+import { Plus, Trash2, Pencil, Package, TrendingUp, AlertCircle } from 'lucide-react'
 
 export default function Dashboard({ user, onLogout }) {
   const [products, setProducts] = useState([])
@@ -9,11 +9,18 @@ export default function Dashboard({ user, onLogout }) {
   const [listings, setListings] = useState([]) // product_listings reais
   const [costComponents, setCostComponents] = useState([])
   const [listingCostComponents, setListingCostComponents] = useState([])
+  const [coverageGaps, setCoverageGaps] = useState([])
   const [companyId, setCompanyId] = useState(null)
   const [userRole, setUserRole] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showNewProduct, setShowNewProduct] = useState(false)
+  const [editingProductId, setEditingProductId] = useState(null) // null = modo criação
   const [selectedPlatform, setSelectedPlatform] = useState('all')
+  const [showGaps, setShowGaps] = useState(false)
+  // Filtros da listagem
+  const [searchText, setSearchText] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('active') // active | inactive | all
   // Form de edição de taxa (só super_admin) — { [ruleId]: { commission_pct, fixed_fee, source_url } }
   const [editRuleForm, setEditRuleForm] = useState({})
   const [newProduct, setNewProduct] = useState({
@@ -51,13 +58,14 @@ export default function Dashboard({ user, onLogout }) {
       setCompanyId(userRow?.company_id || null)
       setUserRole(userRow?.role || null)
 
-      const [productsRes, platformsRes, rulesRes, listingsRes, costComponentsRes, listingCostComponentsRes] = await Promise.all([
-        supabase.from('products').select('*').eq('active', true),
+      const [productsRes, platformsRes, rulesRes, listingsRes, costComponentsRes, listingCostComponentsRes, gapsRes] = await Promise.all([
+        supabase.from('products').select('*'), // busca todos — filtro de status é feito na tela, não na query
         supabase.from('platforms').select('*'),
         supabase.from('platform_fee_rules').select('*'),
         supabase.from('product_listings').select('*'),
         supabase.from('cost_components').select('*').eq('active', true),
         supabase.from('listing_cost_components').select('*'),
+        supabase.from('category_coverage_gaps').select('*').eq('status', 'pending_validation'),
       ])
 
       if (productsRes.error) throw productsRes.error
@@ -66,11 +74,13 @@ export default function Dashboard({ user, onLogout }) {
       if (listingsRes.error) throw listingsRes.error
       if (costComponentsRes.error) throw costComponentsRes.error
       if (listingCostComponentsRes.error) throw listingCostComponentsRes.error
+      if (gapsRes.error) throw gapsRes.error
 
       setProducts(productsRes.data || [])
       setPlatforms(platformsRes.data || [])
       setFeeRules(rulesRes.data || [])
       setListings(listingsRes.data || [])
+      setCoverageGaps(gapsRes.data || [])
       setCostComponents(costComponentsRes.data || [])
       setListingCostComponents(listingCostComponentsRes.data || [])
     } catch (err) {
@@ -186,7 +196,45 @@ export default function Dashboard({ user, onLogout }) {
     })
   }
 
-  async function handleCreateProduct(e) {
+  function openEditProduct(product) {
+    setEditingProductId(product.id)
+    setNewProduct({
+      sku: product.sku,
+      name: product.name,
+      category: product.category,
+      cost_price: String(product.cost_price),
+      weight_kg: product.weight_kg ? String(product.weight_kg) : '',
+    })
+
+    const prefilledListings = {}
+    platforms.forEach((p) => {
+      const listing = listings.find(
+        (l) => l.product_id === product.id && l.platform_id === p.id
+      )
+      if (listing) {
+        const selectedCosts = listingCostComponents
+          .filter((lcc) => lcc.product_listing_id === listing.id)
+          .map((lcc) => lcc.cost_component_id)
+        prefilledListings[p.id] = {
+          enabled: true,
+          sale_price: String(listing.sale_price),
+          selectedCosts,
+          _listingId: listing.id, // guarda o id real pra saber se é update ou insert
+        }
+      }
+    })
+    setNewListings(prefilledListings)
+    setShowNewProduct(true)
+  }
+
+  function closeProductForm() {
+    setShowNewProduct(false)
+    setEditingProductId(null)
+    setNewProduct({ sku: '', name: '', category: '', cost_price: '', weight_kg: '' })
+    setNewListings({})
+  }
+
+  async function handleSubmitProduct(e) {
     e.preventDefault()
 
     if (!companyId) {
@@ -196,6 +244,100 @@ export default function Dashboard({ user, onLogout }) {
       return
     }
 
+    if (editingProductId) {
+      await handleUpdateProduct()
+    } else {
+      await handleCreateProduct()
+    }
+  }
+
+  async function handleUpdateProduct() {
+    const updateData = {
+      sku: newProduct.sku,
+      name: newProduct.name,
+      category: newProduct.category,
+      cost_price: parseFloat(newProduct.cost_price),
+      weight_kg: newProduct.weight_kg ? parseFloat(newProduct.weight_kg) : null,
+    }
+
+    const { data, error } = await supabase
+      .from('products')
+      .update(updateData)
+      .eq('id', editingProductId)
+      .select()
+
+    if (error) {
+      alert('Erro ao atualizar produto: ' + error.message)
+      return
+    }
+
+    const updatedProduct = data[0]
+    let updatedListings = [...listings]
+    let updatedLcc = [...listingCostComponents]
+
+    for (const platform of platforms) {
+      const formEntry = newListings[platform.id]
+      const existingListing = listings.find(
+        (l) => l.product_id === editingProductId && l.platform_id === platform.id
+      )
+
+      if (formEntry?.enabled && formEntry.sale_price) {
+        if (existingListing) {
+          // Atualiza preço se mudou
+          const newPrice = parseFloat(formEntry.sale_price)
+          if (newPrice !== existingListing.sale_price) {
+            const { error: updErr } = await supabase
+              .from('product_listings')
+              .update({ sale_price: newPrice })
+              .eq('id', existingListing.id)
+            if (updErr) {
+              alert(`Erro ao atualizar preço em ${platform.name}: ` + updErr.message)
+              continue
+            }
+            updatedListings = updatedListings.map((l) =>
+              l.id === existingListing.id ? { ...l, sale_price: newPrice } : l
+            )
+          }
+        } else {
+          // Nova plataforma marcada agora — cria listing
+          const { data: newListingData, error: insErr } = await supabase
+            .from('product_listings')
+            .insert([
+              {
+                product_id: editingProductId,
+                platform_id: platform.id,
+                sale_price: parseFloat(formEntry.sale_price),
+              },
+            ])
+            .select()
+          if (insErr) {
+            alert(`Erro ao adicionar ${platform.name}: ` + insErr.message)
+            continue
+          }
+          updatedListings = [...updatedListings, ...(newListingData || [])]
+        }
+      } else if (existingListing) {
+        // Plataforma foi desmarcada — remove o listing (e seus custos, em cascata)
+        const { error: delErr } = await supabase
+          .from('product_listings')
+          .delete()
+          .eq('id', existingListing.id)
+        if (delErr) {
+          alert(`Erro ao remover ${platform.name}: ` + delErr.message)
+          continue
+        }
+        updatedListings = updatedListings.filter((l) => l.id !== existingListing.id)
+        updatedLcc = updatedLcc.filter((lcc) => lcc.product_listing_id !== existingListing.id)
+      }
+    }
+
+    setProducts(products.map((p) => (p.id === editingProductId ? updatedProduct : p)))
+    setListings(updatedListings)
+    setListingCostComponents(updatedLcc)
+    closeProductForm()
+  }
+
+  async function handleCreateProduct() {
     const productData = {
       ...newProduct,
       company_id: companyId,
@@ -272,9 +414,7 @@ export default function Dashboard({ user, onLogout }) {
 
     setProducts([...products, createdProduct])
     setListings([...listings, ...insertedListings])
-    setNewProduct({ sku: '', name: '', category: '', cost_price: '', weight_kg: '' })
-    setNewListings({})
-    setShowNewProduct(false)
+    closeProductForm()
   }
 
   // Nunca exclui de verdade — desativa, preservando histórico de custo e auditoria.
@@ -432,10 +572,21 @@ export default function Dashboard({ user, onLogout }) {
     }
   }
 
-  const displayedProducts =
-    selectedPlatform === 'all'
-      ? products
-      : products.filter((p) => getListing(p.id, selectedPlatform))
+  const availableCategories = [...new Set(products.map((p) => p.category).filter(Boolean))]
+
+  const displayedProducts = products
+    .filter((p) => (selectedPlatform === 'all' ? true : getListing(p.id, selectedPlatform)))
+    .filter((p) => {
+      if (statusFilter === 'active') return p.active
+      if (statusFilter === 'inactive') return !p.active
+      return true // 'all'
+    })
+    .filter((p) => (categoryFilter === 'all' ? true : p.category === categoryFilter))
+    .filter((p) => {
+      if (!searchText) return true
+      const q = searchText.toLowerCase()
+      return p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)
+    })
 
   if (loading) {
     return (
@@ -471,12 +622,72 @@ export default function Dashboard({ user, onLogout }) {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+        {userRole === 'super_admin' && coverageGaps.length > 0 && (
+          <button
+            onClick={() => setShowGaps(!showGaps)}
+            className="mb-4 inline-flex items-center gap-2 bg-orange-100 text-orange-800 text-sm px-4 py-2 rounded-lg hover:bg-orange-200 transition-colors"
+          >
+            <AlertCircle className="w-4 h-4" />
+            {coverageGaps.length} categoria(s) sem regra de taxa cadastrada — clique para ver
+          </button>
+        )}
+
+        {showGaps && (
+          <div className="bg-white rounded-xl shadow-md p-4 mb-6">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Lacunas de Cobertura</h3>
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 uppercase">
+                  <th className="pb-2">Plataforma</th>
+                  <th className="pb-2">Categoria</th>
+                  <th className="pb-2">Detectado em</th>
+                  <th className="pb-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {coverageGaps.map((gap) => {
+                  const platform = platforms.find((p) => p.id === gap.platform_id)
+                  return (
+                    <tr key={gap.id}>
+                      <td className="py-2">{platform?.name || '—'}</td>
+                      <td className="py-2">{gap.category}</td>
+                      <td className="py-2 text-gray-500">
+                        {new Date(gap.detected_at).toLocaleDateString('pt-BR')}
+                      </td>
+                      <td className="py-2 text-right">
+                        <button
+                          onClick={async () => {
+                            const { error } = await supabase
+                              .from('category_coverage_gaps')
+                              .update({ status: 'ignored' })
+                              .eq('id', gap.id)
+                            if (!error) {
+                              setCoverageGaps(coverageGaps.filter((g) => g.id !== gap.id))
+                            }
+                          }}
+                          className="text-xs text-gray-500 hover:underline"
+                        >
+                          ignorar
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            <p className="text-xs text-gray-400 mt-3">
+              Cadastre a regra de taxa dessa categoria+plataforma na tela de Regras de Taxa
+              (ainda não construída) ou peça pra eu inserir direto no banco.
+            </p>
+          </div>
+        )}
+
+        <div className="mb-4 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
           <div className="flex items-center gap-3">
             <Package className="w-6 h-6 text-blue-600" />
             <h2 className="text-xl font-semibold text-gray-900">Produtos</h2>
             <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
-              {products.length}
+              {displayedProducts.length}
             </span>
           </div>
 
@@ -494,7 +705,10 @@ export default function Dashboard({ user, onLogout }) {
               ))}
             </select>
             <button
-              onClick={() => setShowNewProduct(true)}
+              onClick={() => {
+                setEditingProductId(null)
+                setShowNewProduct(true)
+              }}
               className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
             >
               <Plus className="w-4 h-4" />
@@ -503,9 +717,43 @@ export default function Dashboard({ user, onLogout }) {
           </div>
         </div>
 
+        <div className="mb-6 flex flex-col sm:flex-row gap-3">
+          <input
+            type="text"
+            placeholder="Buscar por SKU ou nome..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg text-sm flex-1 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+          >
+            <option value="all">Todas as categorias</option>
+            {availableCategories.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+          >
+            <option value="active">Ativos</option>
+            <option value="inactive">Inativos</option>
+            <option value="all">Todos</option>
+          </select>
+        </div>
+
         {showNewProduct && (
           <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-            <form onSubmit={handleCreateProduct} className="space-y-6">
+            <h3 className="text-base font-semibold text-gray-900 mb-4">
+              {editingProductId ? 'Editar produto' : 'Novo produto'}
+            </h3>
+            <form onSubmit={handleSubmitProduct} className="space-y-6">
               <div>
                 <h3 className="text-sm font-semibold text-gray-700 mb-3">Dados do produto</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -625,14 +873,11 @@ export default function Dashboard({ user, onLogout }) {
                   type="submit"
                   className="flex-1 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
                 >
-                  Salvar
+                  {editingProductId ? 'Salvar alterações' : 'Salvar'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowNewProduct(false)
-                    setNewListings({})
-                  }}
+                  onClick={closeProductForm}
                   className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg transition-colors"
                 >
                   Cancelar
@@ -749,16 +994,53 @@ export default function Dashboard({ user, onLogout }) {
                             </>
                           )}
                           <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleDeactivateProduct(product.id, product.name)
-                              }}
-                              title="Desativar produto (não apaga o histórico)"
-                              className="text-red-600 hover:text-red-900 transition-colors"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            <div className="flex justify-end gap-3">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  openEditProduct(product)
+                                }}
+                                title="Editar produto"
+                                className="text-blue-600 hover:text-blue-900 transition-colors"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                              {product.active ? (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleDeactivateProduct(product.id, product.name)
+                                  }}
+                                  title="Desativar produto (não apaga o histórico)"
+                                  className="text-red-600 hover:text-red-900 transition-colors"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={async (e) => {
+                                    e.stopPropagation()
+                                    const { error } = await supabase
+                                      .from('products')
+                                      .update({ active: true })
+                                      .eq('id', product.id)
+                                    if (error) {
+                                      alert('Erro ao reativar: ' + error.message)
+                                      return
+                                    }
+                                    setProducts(
+                                      products.map((p) =>
+                                        p.id === product.id ? { ...p, active: true } : p
+                                      )
+                                    )
+                                  }}
+                                  title="Reativar produto"
+                                  className="text-green-600 hover:text-green-900 text-xs font-medium"
+                                >
+                                  Reativar
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
 
