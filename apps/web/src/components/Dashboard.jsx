@@ -17,6 +17,20 @@ export default function Dashboard({ user, onLogout }) {
   const [editingProductId, setEditingProductId] = useState(null) // null = modo criação
   const [selectedPlatform, setSelectedPlatform] = useState('all')
   const [showGaps, setShowGaps] = useState(false)
+  const [activeTab, setActiveTab] = useState('produtos') // produtos | regras
+  // Form de nova regra de taxa (do zero, ou resolvendo uma lacuna)
+  const [showNewRuleForm, setShowNewRuleForm] = useState(false)
+  const [resolvingGapId, setResolvingGapId] = useState(null)
+  const [newRule, setNewRule] = useState({
+    platform_id: '',
+    category: '',
+    listing_type: '',
+    price_min: '0',
+    price_max: '',
+    commission_pct: '',
+    fixed_fee: '0',
+    source_url: '',
+  })
   // Filtros da listagem
   const [searchText, setSearchText] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -337,6 +351,80 @@ export default function Dashboard({ user, onLogout }) {
     closeProductForm()
   }
 
+  async function handleCreateRule(e) {
+    e.preventDefault()
+    if (!newRule.platform_id || !newRule.commission_pct || !newRule.source_url) {
+      alert('Preencha plataforma, comissão e fonte antes de salvar.')
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('platform_fee_rules')
+      .insert([
+        {
+          platform_id: newRule.platform_id,
+          category: newRule.category || null,
+          listing_type: newRule.listing_type || null,
+          price_min: parseFloat(newRule.price_min) || 0,
+          price_max: newRule.price_max ? parseFloat(newRule.price_max) : null,
+          commission_pct: parseFloat(newRule.commission_pct),
+          fixed_fee: parseFloat(newRule.fixed_fee) || 0,
+          valid_from: new Date().toISOString().slice(0, 10),
+          source_url: newRule.source_url,
+        },
+      ])
+      .select()
+
+    if (error) {
+      alert('Erro ao criar regra: ' + error.message)
+      return
+    }
+
+    const createdRule = data[0]
+    setFeeRules([...feeRules, createdRule])
+
+    // Se essa regra estava resolvendo uma lacuna, marca como resolvida
+    if (resolvingGapId) {
+      const { error: gapError } = await supabase
+        .from('category_coverage_gaps')
+        .update({ status: 'resolved', resolved_rule_id: createdRule.id })
+        .eq('id', resolvingGapId)
+
+      if (!gapError) {
+        setCoverageGaps(coverageGaps.filter((g) => g.id !== resolvingGapId))
+      }
+    }
+
+    setNewRule({
+      platform_id: '',
+      category: '',
+      listing_type: '',
+      price_min: '0',
+      price_max: '',
+      commission_pct: '',
+      fixed_fee: '0',
+      source_url: '',
+    })
+    setResolvingGapId(null)
+    setShowNewRuleForm(false)
+  }
+
+  function openResolveGap(gap) {
+    setNewRule({
+      platform_id: gap.platform_id,
+      category: gap.category === '(sem categoria definida)' ? '' : gap.category,
+      listing_type: '',
+      price_min: '0',
+      price_max: '',
+      commission_pct: '',
+      fixed_fee: '0',
+      source_url: '',
+    })
+    setResolvingGapId(gap.id)
+    setShowNewRuleForm(true)
+    setActiveTab('regras')
+  }
+
   async function handleCreateProduct() {
     const productData = {
       ...newProduct,
@@ -654,7 +742,13 @@ export default function Dashboard({ user, onLogout }) {
                       <td className="py-2 text-gray-500">
                         {new Date(gap.detected_at).toLocaleDateString('pt-BR')}
                       </td>
-                      <td className="py-2 text-right">
+                      <td className="py-2 text-right space-x-3">
+                        <button
+                          onClick={() => openResolveGap(gap)}
+                          className="text-xs text-blue-600 hover:underline font-medium"
+                        >
+                          resolver
+                        </button>
                         <button
                           onClick={async () => {
                             const { error } = await supabase
@@ -675,13 +769,36 @@ export default function Dashboard({ user, onLogout }) {
                 })}
               </tbody>
             </table>
-            <p className="text-xs text-gray-400 mt-3">
-              Cadastre a regra de taxa dessa categoria+plataforma na tela de Regras de Taxa
-              (ainda não construída) ou peça pra eu inserir direto no banco.
-            </p>
           </div>
         )}
 
+        {userRole === 'super_admin' && (
+          <div className="mb-6 flex gap-1 border-b border-gray-200">
+            <button
+              onClick={() => setActiveTab('produtos')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'produtos'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Produtos
+            </button>
+            <button
+              onClick={() => setActiveTab('regras')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'regras'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Regras de Taxa
+            </button>
+          </div>
+        )}
+
+        {activeTab === 'produtos' && (
+        <>
         <div className="mb-4 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
           <div className="flex items-center gap-3">
             <Package className="w-6 h-6 text-blue-600" />
@@ -1455,6 +1572,182 @@ export default function Dashboard({ user, onLogout }) {
                   o sistema mostra "—" em vez de um valor estimado.
                 </p>
               </div>
+            </div>
+          </div>
+        )}
+        </>
+        )}
+
+        {activeTab === 'regras' && userRole === 'super_admin' && (
+          <div>
+            <div className="mb-4 flex justify-between items-center">
+              <h2 className="text-xl font-semibold text-gray-900">Regras de Taxa</h2>
+              <button
+                onClick={() => {
+                  setResolvingGapId(null)
+                  setShowNewRuleForm(true)
+                }}
+                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Nova Regra
+              </button>
+            </div>
+
+            {showNewRuleForm && (
+              <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+                <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                  {resolvingGapId ? 'Resolver lacuna — nova regra' : 'Nova regra de taxa'}
+                </h3>
+                <form onSubmit={handleCreateRule} className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <select
+                      value={newRule.platform_id}
+                      onChange={(e) => setNewRule({ ...newRule, platform_id: e.target.value })}
+                      required
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="">Plataforma...</option>
+                      {platforms.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="Categoria (vazio = geral)"
+                      value={newRule.category}
+                      onChange={(e) => setNewRule({ ...newRule, category: e.target.value })}
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                    <select
+                      value={newRule.listing_type}
+                      onChange={(e) => setNewRule({ ...newRule, listing_type: e.target.value })}
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="">Tipo de anúncio (opcional)</option>
+                      <option value="classico">Clássico</option>
+                      <option value="premium">Premium</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <input
+                      type="number"
+                      placeholder="Preço mín."
+                      value={newRule.price_min}
+                      onChange={(e) => setNewRule({ ...newRule, price_min: e.target.value })}
+                      step="0.01"
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Preço máx. (vazio = sem limite)"
+                      value={newRule.price_max}
+                      onChange={(e) => setNewRule({ ...newRule, price_max: e.target.value })}
+                      step="0.01"
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Comissão %"
+                      value={newRule.commission_pct}
+                      onChange={(e) => setNewRule({ ...newRule, commission_pct: e.target.value })}
+                      required
+                      step="0.01"
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Taxa fixa R$"
+                      value={newRule.fixed_fee}
+                      onChange={(e) => setNewRule({ ...newRule, fixed_fee: e.target.value })}
+                      step="0.01"
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Fonte (link oficial ou nota 'ESTIMATIVA - motivo')"
+                    value={newRule.source_url}
+                    onChange={(e) => setNewRule({ ...newRule, source_url: e.target.value })}
+                    required
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm w-full"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="submit"
+                      className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm"
+                    >
+                      Salvar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNewRuleForm(false)
+                        setResolvingGapId(null)
+                      }}
+                      className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            <div className="bg-white rounded-xl shadow-md overflow-hidden">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plataforma</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Categoria</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipo</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Faixa preço</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Comissão</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tx. fixa</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Vigência</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {feeRules
+                    .filter((r) => !r.valid_to || new Date(r.valid_to) >= new Date())
+                    .sort((a, b) => new Date(b.valid_from) - new Date(a.valid_from))
+                    .map((rule) => {
+                      const platform = platforms.find((p) => p.id === rule.platform_id)
+                      const isEstimate =
+                        rule.source_url?.toUpperCase().includes('ESTIMATIVA') ||
+                        rule.source_url?.toUpperCase().includes('A VALIDAR')
+                      return (
+                        <tr key={rule.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3">{platform?.name || '—'}</td>
+                          <td className="px-4 py-3">{rule.category || 'Geral'}</td>
+                          <td className="px-4 py-3">{rule.listing_type || '—'}</td>
+                          <td className="px-4 py-3">
+                            R$ {rule.price_min} – {rule.price_max ?? '∞'}
+                          </td>
+                          <td className="px-4 py-3">{rule.commission_pct}%</td>
+                          <td className="px-4 py-3">R$ {rule.fixed_fee}</td>
+                          <td className="px-4 py-3 text-gray-500">
+                            desde {new Date(rule.valid_from).toLocaleDateString('pt-BR')}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded-full ${
+                                isEstimate
+                                  ? 'bg-orange-100 text-orange-700'
+                                  : 'bg-green-100 text-green-700'
+                              }`}
+                            >
+                              {isEstimate ? '⚠️ Estimativa' : '✅ Confirmada'}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
