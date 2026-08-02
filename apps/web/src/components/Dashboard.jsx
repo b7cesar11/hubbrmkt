@@ -7,6 +7,8 @@ export default function Dashboard({ user, onLogout }) {
   const [platforms, setPlatforms] = useState([])
   const [feeRules, setFeeRules] = useState([])
   const [listings, setListings] = useState([]) // product_listings reais
+  const [costComponents, setCostComponents] = useState([])
+  const [listingCostComponents, setListingCostComponents] = useState([])
   const [companyId, setCompanyId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showNewProduct, setShowNewProduct] = useState(false)
@@ -38,22 +40,28 @@ export default function Dashboard({ user, onLogout }) {
       if (userError) throw userError
       setCompanyId(userRow?.company_id || null)
 
-      const [productsRes, platformsRes, rulesRes, listingsRes] = await Promise.all([
+      const [productsRes, platformsRes, rulesRes, listingsRes, costComponentsRes, listingCostComponentsRes] = await Promise.all([
         supabase.from('products').select('*').eq('active', true),
         supabase.from('platforms').select('*'),
         supabase.from('platform_fee_rules').select('*'),
         supabase.from('product_listings').select('*'),
+        supabase.from('cost_components').select('*').eq('active', true),
+        supabase.from('listing_cost_components').select('*'),
       ])
 
       if (productsRes.error) throw productsRes.error
       if (platformsRes.error) throw platformsRes.error
       if (rulesRes.error) throw rulesRes.error
       if (listingsRes.error) throw listingsRes.error
+      if (costComponentsRes.error) throw costComponentsRes.error
+      if (listingCostComponentsRes.error) throw listingCostComponentsRes.error
 
       setProducts(productsRes.data || [])
       setPlatforms(platformsRes.data || [])
       setFeeRules(rulesRes.data || [])
       setListings(listingsRes.data || [])
+      setCostComponents(costComponentsRes.data || [])
+      setListingCostComponents(listingCostComponentsRes.data || [])
     } catch (err) {
       console.error('Erro ao carregar dados:', err)
     } finally {
@@ -194,7 +202,24 @@ export default function Dashboard({ user, onLogout }) {
 
     const commission = (listing.sale_price * rule.commission_pct) / 100
     const fixedFee = rule.fixed_fee || 0
-    const netMargin = listing.sale_price - product.cost_price - commission - fixedFee
+
+    // Custos adicionais vinculados a este listing específico (afiliado, marketing, ads...)
+    const appliedCosts = listingCostComponents
+      .filter((lcc) => lcc.product_listing_id === listing.id)
+      .map((lcc) => {
+        const component = costComponents.find((c) => c.id === lcc.cost_component_id)
+        if (!component) return null
+        const value = lcc.value_override ?? component.default_value
+        const amount =
+          component.calc_type === 'percentage' ? (listing.sale_price * value) / 100 : value
+        return { name: component.name, amount, calcType: component.calc_type, value }
+      })
+      .filter(Boolean)
+
+    const additionalCostsTotal = appliedCosts.reduce((sum, c) => sum + c.amount, 0)
+
+    const netMargin =
+      listing.sale_price - product.cost_price - commission - fixedFee - additionalCostsTotal
     const marginPct = (netMargin / listing.sale_price) * 100
 
     return {
@@ -202,6 +227,8 @@ export default function Dashboard({ user, onLogout }) {
       salePrice: listing.sale_price,
       commission,
       fixedFee,
+      appliedCosts,
+      additionalCostsTotal,
       netMargin,
       marginPct,
       rule,
@@ -439,15 +466,23 @@ export default function Dashboard({ user, onLogout }) {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               {margin?.status === 'ok' ? (
-                                <span
-                                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                    margin.netMargin > 0
-                                      ? 'bg-green-100 text-green-800'
-                                      : 'bg-red-100 text-red-800'
-                                  }`}
-                                >
-                                  R$ {margin.netMargin.toFixed(2)}
-                                </span>
+                                <div className="flex flex-col">
+                                  <span
+                                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${
+                                      margin.netMargin > 0
+                                        ? 'bg-green-100 text-green-800'
+                                        : 'bg-red-100 text-red-800'
+                                    }`}
+                                  >
+                                    R$ {margin.netMargin.toFixed(2)}
+                                  </span>
+                                  {margin.appliedCosts.length > 0 && (
+                                    <span className="text-[11px] text-gray-400 mt-1">
+                                      inclui {margin.appliedCosts.map((c) => c.name).join(', ')} (
+                                      -R$ {margin.additionalCostsTotal.toFixed(2)})
+                                    </span>
+                                  )}
+                                </div>
                               ) : margin?.status === 'sem_preco' ? (
                                 <span className="text-xs text-gray-400">— sem preço cadastrado</span>
                               ) : (
