@@ -23,6 +23,13 @@ export default function Dashboard({ user, onLogout }) {
   // Seção B: presença por plataforma no cadastro — { [platform_id]: { enabled: bool, sale_price: string } }
   const [newListings, setNewListings] = useState({})
 
+  // Accordion de detalhe do produto
+  const [expandedProductId, setExpandedProductId] = useState(null)
+  // Form de "adicionar custo existente a este listing" — { [listingId]: { componentId, override } }
+  const [addCostForm, setAddCostForm] = useState({})
+  // Form de "criar novo tipo de custo" — { [listingId]: { show, name, category, calc_type, default_value } }
+  const [newComponentForm, setNewComponentForm] = useState({})
+
   useEffect(() => {
     loadData()
   }, [])
@@ -190,6 +197,75 @@ export default function Dashboard({ user, onLogout }) {
 
   function getListing(productId, platformId) {
     return listings.find((l) => l.product_id === productId && l.platform_id === platformId)
+  }
+
+  async function handleAddCostToListing(listingId) {
+    const form = addCostForm[listingId]
+    if (!form?.componentId) return
+
+    const { data, error } = await supabase
+      .from('listing_cost_components')
+      .insert([
+        {
+          product_listing_id: listingId,
+          cost_component_id: form.componentId,
+          value_override: form.override ? parseFloat(form.override) : null,
+        },
+      ])
+      .select()
+
+    if (error) {
+      alert('Erro ao adicionar custo: ' + error.message)
+      return
+    }
+
+    setListingCostComponents([...listingCostComponents, ...(data || [])])
+    setAddCostForm((prev) => ({ ...prev, [listingId]: { componentId: '', override: '' } }))
+  }
+
+  async function handleRemoveCostFromListing(id) {
+    const { error } = await supabase.from('listing_cost_components').delete().eq('id', id)
+    if (error) {
+      alert('Erro ao remover custo: ' + error.message)
+      return
+    }
+    setListingCostComponents(listingCostComponents.filter((lcc) => lcc.id !== id))
+  }
+
+  async function handleCreateCostComponent(listingId) {
+    const form = newComponentForm[listingId]
+    if (!form?.name || !form?.default_value) {
+      alert('Preencha nome e valor padrão do novo custo.')
+      return
+    }
+    if (!companyId) return
+
+    const { data, error } = await supabase
+      .from('cost_components')
+      .insert([
+        {
+          company_id: companyId,
+          name: form.name,
+          category: form.category || 'other',
+          calc_type: form.calc_type || 'percentage',
+          default_value: parseFloat(form.default_value),
+        },
+      ])
+      .select()
+
+    if (error) {
+      alert('Erro ao criar tipo de custo: ' + error.message)
+      return
+    }
+
+    const created = data[0]
+    setCostComponents([...costComponents, created])
+    setNewComponentForm((prev) => ({ ...prev, [listingId]: { show: false } }))
+    // já pré-seleciona esse custo recém-criado no form de adicionar
+    setAddCostForm((prev) => ({
+      ...prev,
+      [listingId]: { componentId: created.id, override: '' },
+    }))
   }
 
   // Retorna null quando falta preço de venda OU regra de taxa — nunca inventa valor.
@@ -452,75 +528,363 @@ export default function Dashboard({ user, onLogout }) {
                       selectedPlatform !== 'all' ? computeMargin(product, selectedPlatform) : null
 
                     return (
-                      <tr key={product.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{product.sku}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{product.name}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.category}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          R$ {product.cost_price?.toFixed(2)}
-                        </td>
-                        {selectedPlatform !== 'all' && (
-                          <>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {margin?.status === 'ok' ? `R$ ${margin.salePrice.toFixed(2)}` : '—'}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              {margin?.status === 'ok' ? (
-                                <div className="flex flex-col">
+                      <React.Fragment key={product.id}>
+                        <tr
+                          className="hover:bg-gray-50 cursor-pointer"
+                          onClick={() =>
+                            setExpandedProductId(
+                              expandedProductId === product.id ? null : product.id
+                            )
+                          }
+                        >
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{product.sku}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{product.name}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.category}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            R$ {product.cost_price?.toFixed(2)}
+                          </td>
+                          {selectedPlatform !== 'all' && (
+                            <>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {margin?.status === 'ok' ? `R$ ${margin.salePrice.toFixed(2)}` : '—'}
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                {margin?.status === 'ok' ? (
+                                  <div className="flex flex-col">
+                                    <span
+                                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${
+                                        margin.netMargin > 0
+                                          ? 'bg-green-100 text-green-800'
+                                          : 'bg-red-100 text-red-800'
+                                      }`}
+                                    >
+                                      R$ {margin.netMargin.toFixed(2)}
+                                    </span>
+                                    {margin.appliedCosts.length > 0 && (
+                                      <span className="text-[11px] text-gray-400 mt-1">
+                                        inclui {margin.appliedCosts.map((c) => c.name).join(', ')} (
+                                        -R$ {margin.additionalCostsTotal.toFixed(2)})
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : margin?.status === 'sem_preco' ? (
+                                  <span className="text-xs text-gray-400">— sem preço cadastrado</span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-xs text-orange-600">
+                                    <AlertCircle className="w-3 h-3" />
+                                    Sem regra de taxa
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                {margin?.status === 'ok' ? (
                                   <span
-                                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${
-                                      margin.netMargin > 0
-                                        ? 'bg-green-100 text-green-800'
-                                        : 'bg-red-100 text-red-800'
+                                    className={`text-sm font-medium ${
+                                      margin.marginPct > 10
+                                        ? 'text-green-600'
+                                        : margin.marginPct > 0
+                                        ? 'text-yellow-600'
+                                        : 'text-red-600'
                                     }`}
                                   >
-                                    R$ {margin.netMargin.toFixed(2)}
+                                    {margin.marginPct.toFixed(1)}%
                                   </span>
-                                  {margin.appliedCosts.length > 0 && (
-                                    <span className="text-[11px] text-gray-400 mt-1">
-                                      inclui {margin.appliedCosts.map((c) => c.name).join(', ')} (
-                                      -R$ {margin.additionalCostsTotal.toFixed(2)})
-                                    </span>
-                                  )}
-                                </div>
-                              ) : margin?.status === 'sem_preco' ? (
-                                <span className="text-xs text-gray-400">— sem preço cadastrado</span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 text-xs text-orange-600">
-                                  <AlertCircle className="w-3 h-3" />
-                                  Sem regra de taxa
-                                </span>
-                              )}
+                                ) : (
+                                  <span className="text-sm text-gray-400">—</span>
+                                )}
+                              </td>
+                            </>
+                          )}
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleDeactivateProduct(product.id, product.name)
+                              }}
+                              title="Desativar produto (não apaga o histórico)"
+                              className="text-red-600 hover:text-red-900 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+
+                        {expandedProductId === product.id && (
+                          <tr>
+                            <td colSpan={selectedPlatform !== 'all' ? 8 : 5} className="bg-gray-50 px-6 py-5">
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                {platforms.map((platform) => {
+                                  const listing = getListing(product.id, platform.id)
+                                  if (!listing) {
+                                    return (
+                                      <div
+                                        key={platform.id}
+                                        className="bg-white rounded-lg border border-dashed border-gray-300 p-4 text-sm text-gray-400"
+                                      >
+                                        {platform.name} — não vendido nesta plataforma
+                                      </div>
+                                    )
+                                  }
+
+                                  const m = computeMargin(product, platform.id)
+                                  const isEstimate =
+                                    m.status === 'ok' &&
+                                    (m.rule.source_url?.toUpperCase().includes('ESTIMATIVA') ||
+                                      m.rule.source_url?.toUpperCase().includes('A VALIDAR'))
+                                  const appliedIds = new Set(
+                                    listingCostComponents
+                                      .filter((lcc) => lcc.product_listing_id === listing.id)
+                                      .map((lcc) => lcc.cost_component_id)
+                                  )
+                                  const availableComponents = costComponents.filter(
+                                    (c) => !appliedIds.has(c.id)
+                                  )
+                                  const listingLccs = listingCostComponents.filter(
+                                    (lcc) => lcc.product_listing_id === listing.id
+                                  )
+
+                                  return (
+                                    <div key={platform.id} className="bg-white rounded-lg border border-gray-200 p-4">
+                                      <div className="flex items-center justify-between mb-2">
+                                        <h4 className="font-semibold text-gray-900 text-sm">{platform.name}</h4>
+                                        {m.status === 'ok' && (
+                                          <span
+                                            className={`text-[11px] px-2 py-0.5 rounded-full ${
+                                              isEstimate
+                                                ? 'bg-orange-100 text-orange-700'
+                                                : 'bg-green-100 text-green-700'
+                                            }`}
+                                          >
+                                            {isEstimate ? '⚠️ Estimativa' : '✅ Confirmada'}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {m.status !== 'ok' ? (
+                                        <p className="text-xs text-gray-400">
+                                          {m.status === 'sem_preco'
+                                            ? 'Sem preço de venda cadastrado.'
+                                            : 'Sem regra de taxa cadastrada para esta categoria/plataforma.'}
+                                        </p>
+                                      ) : (
+                                        <>
+                                          <div className="text-xs text-gray-600 space-y-1 mb-3">
+                                            <div className="flex justify-between">
+                                              <span>Preço de venda</span>
+                                              <span>R$ {m.salePrice.toFixed(2)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                              <span>Custo do produto</span>
+                                              <span>- R$ {product.cost_price.toFixed(2)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                              <span>Comissão plataforma ({m.rule.commission_pct}%)</span>
+                                              <span>- R$ {m.commission.toFixed(2)}</span>
+                                            </div>
+                                            {m.fixedFee > 0 && (
+                                              <div className="flex justify-between">
+                                                <span>Taxa fixa</span>
+                                                <span>- R$ {m.fixedFee.toFixed(2)}</span>
+                                              </div>
+                                            )}
+                                            {m.appliedCosts.map((c, i) => (
+                                              <div key={i} className="flex justify-between">
+                                                <span>
+                                                  {c.name}{' '}
+                                                  {c.calcType === 'percentage' ? `(${c.value}%)` : '(fixo)'}
+                                                </span>
+                                                <span>- R$ {c.amount.toFixed(2)}</span>
+                                              </div>
+                                            ))}
+                                            <div className="flex justify-between font-semibold text-gray-900 border-t pt-1 mt-1">
+                                              <span>Margem líquida</span>
+                                              <span>
+                                                R$ {m.netMargin.toFixed(2)} ({m.marginPct.toFixed(1)}%)
+                                              </span>
+                                            </div>
+                                          </div>
+
+                                          {/* Custos adicionais aplicados — remover */}
+                                          {listingLccs.length > 0 && (
+                                            <div className="space-y-1 mb-2">
+                                              {listingLccs.map((lcc) => {
+                                                const comp = costComponents.find(
+                                                  (c) => c.id === lcc.cost_component_id
+                                                )
+                                                return (
+                                                  <div
+                                                    key={lcc.id}
+                                                    className="flex items-center justify-between text-xs bg-gray-50 rounded px-2 py-1"
+                                                  >
+                                                    <span>{comp?.name || '—'}</span>
+                                                    <button
+                                                      onClick={(e) => {
+                                                        e.stopPropagation()
+                                                        handleRemoveCostFromListing(lcc.id)
+                                                      }}
+                                                      className="text-red-500 hover:text-red-700"
+                                                    >
+                                                      remover
+                                                    </button>
+                                                  </div>
+                                                )
+                                              })}
+                                            </div>
+                                          )}
+
+                                          {/* Adicionar custo existente */}
+                                          {availableComponents.length > 0 && (
+                                            <div
+                                              className="flex gap-1 mb-2"
+                                              onClick={(e) => e.stopPropagation()}
+                                            >
+                                              <select
+                                                value={addCostForm[listing.id]?.componentId || ''}
+                                                onChange={(e) =>
+                                                  setAddCostForm((prev) => ({
+                                                    ...prev,
+                                                    [listing.id]: {
+                                                      ...prev[listing.id],
+                                                      componentId: e.target.value,
+                                                    },
+                                                  }))
+                                                }
+                                                className="text-xs border border-gray-300 rounded px-2 py-1 flex-1"
+                                              >
+                                                <option value="">+ adicionar custo...</option>
+                                                {availableComponents.map((c) => (
+                                                  <option key={c.id} value={c.id}>
+                                                    {c.name} (
+                                                    {c.calc_type === 'percentage'
+                                                      ? `${c.default_value}%`
+                                                      : `R$${c.default_value}`}
+                                                    )
+                                                  </option>
+                                                ))}
+                                              </select>
+                                              <button
+                                                onClick={() => handleAddCostToListing(listing.id)}
+                                                className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
+                                              >
+                                                Add
+                                              </button>
+                                            </div>
+                                          )}
+
+                                          {/* Criar novo tipo de custo, direto daqui */}
+                                          <div onClick={(e) => e.stopPropagation()}>
+                                            {!newComponentForm[listing.id]?.show ? (
+                                              <button
+                                                onClick={() =>
+                                                  setNewComponentForm((prev) => ({
+                                                    ...prev,
+                                                    [listing.id]: { show: true },
+                                                  }))
+                                                }
+                                                className="text-xs text-blue-600 hover:underline"
+                                              >
+                                                + criar novo tipo de custo
+                                              </button>
+                                            ) : (
+                                              <div className="space-y-1 bg-blue-50 rounded p-2 mt-1">
+                                                <input
+                                                  type="text"
+                                                  placeholder="Nome (ex: Comissão Creator)"
+                                                  value={newComponentForm[listing.id]?.name || ''}
+                                                  onChange={(e) =>
+                                                    setNewComponentForm((prev) => ({
+                                                      ...prev,
+                                                      [listing.id]: {
+                                                        ...prev[listing.id],
+                                                        name: e.target.value,
+                                                      },
+                                                    }))
+                                                  }
+                                                  className="text-xs border border-gray-300 rounded px-2 py-1 w-full"
+                                                />
+                                                <div className="flex gap-1">
+                                                  <select
+                                                    value={newComponentForm[listing.id]?.category || 'other'}
+                                                    onChange={(e) =>
+                                                      setNewComponentForm((prev) => ({
+                                                        ...prev,
+                                                        [listing.id]: {
+                                                          ...prev[listing.id],
+                                                          category: e.target.value,
+                                                        },
+                                                      }))
+                                                    }
+                                                    className="text-xs border border-gray-300 rounded px-1 py-1"
+                                                  >
+                                                    <option value="affiliate_commission">Afiliado</option>
+                                                    <option value="marketing_commission">Marketing</option>
+                                                    <option value="ads_cost">Ads</option>
+                                                    <option value="other">Outro</option>
+                                                  </select>
+                                                  <select
+                                                    value={newComponentForm[listing.id]?.calc_type || 'percentage'}
+                                                    onChange={(e) =>
+                                                      setNewComponentForm((prev) => ({
+                                                        ...prev,
+                                                        [listing.id]: {
+                                                          ...prev[listing.id],
+                                                          calc_type: e.target.value,
+                                                        },
+                                                      }))
+                                                    }
+                                                    className="text-xs border border-gray-300 rounded px-1 py-1"
+                                                  >
+                                                    <option value="percentage">%</option>
+                                                    <option value="fixed">R$ fixo</option>
+                                                  </select>
+                                                  <input
+                                                    type="number"
+                                                    placeholder="Valor"
+                                                    value={newComponentForm[listing.id]?.default_value || ''}
+                                                    onChange={(e) =>
+                                                      setNewComponentForm((prev) => ({
+                                                        ...prev,
+                                                        [listing.id]: {
+                                                          ...prev[listing.id],
+                                                          default_value: e.target.value,
+                                                        },
+                                                      }))
+                                                    }
+                                                    className="text-xs border border-gray-300 rounded px-2 py-1 w-16"
+                                                  />
+                                                </div>
+                                                <div className="flex gap-1">
+                                                  <button
+                                                    onClick={() => handleCreateCostComponent(listing.id)}
+                                                    className="text-xs bg-green-600 text-white px-2 py-1 rounded hover:bg-green-700"
+                                                  >
+                                                    Criar e usar
+                                                  </button>
+                                                  <button
+                                                    onClick={() =>
+                                                      setNewComponentForm((prev) => ({
+                                                        ...prev,
+                                                        [listing.id]: { show: false },
+                                                      }))
+                                                    }
+                                                    className="text-xs bg-gray-200 px-2 py-1 rounded hover:bg-gray-300"
+                                                  >
+                                                    Cancelar
+                                                  </button>
+                                                </div>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              {margin?.status === 'ok' ? (
-                                <span
-                                  className={`text-sm font-medium ${
-                                    margin.marginPct > 10
-                                      ? 'text-green-600'
-                                      : margin.marginPct > 0
-                                      ? 'text-yellow-600'
-                                      : 'text-red-600'
-                                  }`}
-                                >
-                                  {margin.marginPct.toFixed(1)}%
-                                </span>
-                              ) : (
-                                <span className="text-sm text-gray-400">—</span>
-                              )}
-                            </td>
-                          </>
+                          </tr>
                         )}
-                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                          <button
-                            onClick={() => handleDeactivateProduct(product.id, product.name)}
-                            title="Desativar produto (não apaga o histórico)"
-                            className="text-red-600 hover:text-red-900 transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
+                      </React.Fragment>
                     )
                   })}
                 </tbody>
