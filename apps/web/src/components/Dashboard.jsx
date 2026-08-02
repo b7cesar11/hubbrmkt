@@ -6,6 +6,7 @@ export default function Dashboard({ user, onLogout }) {
   const [products, setProducts] = useState([])
   const [platforms, setPlatforms] = useState([])
   const [feeRules, setFeeRules] = useState([])
+  const [listings, setListings] = useState([]) // product_listings reais
   const [loading, setLoading] = useState(true)
   const [showNewProduct, setShowNewProduct] = useState(false)
   const [selectedPlatform, setSelectedPlatform] = useState('all')
@@ -16,34 +17,31 @@ export default function Dashboard({ user, onLogout }) {
     cost_price: '',
     weight_kg: '',
   })
+  // Seção B: presença por plataforma no cadastro — { [platform_id]: { enabled: bool, sale_price: string } }
+  const [newListings, setNewListings] = useState({})
 
   useEffect(() => {
     loadData()
   }, [])
 
-  useEffect(() => {
-    if (selectedPlatform !== 'all') {
-      calculateMargins()
-    } else {
-      loadProducts()
-    }
-  }, [selectedPlatform])
-
   async function loadData() {
     try {
-      const [productsRes, platformsRes, rulesRes] = await Promise.all([
-        supabase.from('products').select('*'),
+      const [productsRes, platformsRes, rulesRes, listingsRes] = await Promise.all([
+        supabase.from('products').select('*').eq('active', true),
         supabase.from('platforms').select('*'),
         supabase.from('platform_fee_rules').select('*'),
+        supabase.from('product_listings').select('*'),
       ])
 
       if (productsRes.error) throw productsRes.error
       if (platformsRes.error) throw platformsRes.error
       if (rulesRes.error) throw rulesRes.error
+      if (listingsRes.error) throw listingsRes.error
 
       setProducts(productsRes.data || [])
       setPlatforms(platformsRes.data || [])
       setFeeRules(rulesRes.data || [])
+      setListings(listingsRes.data || [])
     } catch (err) {
       console.error('Erro ao carregar dados:', err)
     } finally {
@@ -51,11 +49,21 @@ export default function Dashboard({ user, onLogout }) {
     }
   }
 
-  async function loadProducts() {
-    const { data, error } = await supabase.from('products').select('*')
-    if (!error && data) {
-      setProducts(data)
-    }
+  function toggleListingPlatform(platformId) {
+    setNewListings((prev) => ({
+      ...prev,
+      [platformId]: {
+        enabled: !prev[platformId]?.enabled,
+        sale_price: prev[platformId]?.sale_price || '',
+      },
+    }))
+  }
+
+  function setListingPrice(platformId, value) {
+    setNewListings((prev) => ({
+      ...prev,
+      [platformId]: { ...prev[platformId], sale_price: value },
+    }))
   }
 
   async function handleCreateProduct(e) {
@@ -78,76 +86,112 @@ export default function Dashboard({ user, onLogout }) {
       return
     }
 
-    setProducts([...products, data[0]])
+    const createdProduct = data[0]
+
+    // Seção B: cria um product_listing real para cada plataforma marcada com preço
+    const listingsToInsert = Object.entries(newListings)
+      .filter(([, v]) => v.enabled && v.sale_price)
+      .map(([platformId, v]) => ({
+        product_id: createdProduct.id,
+        platform_id: platformId,
+        sale_price: parseFloat(v.sale_price),
+      }))
+
+    let insertedListings = []
+    if (listingsToInsert.length > 0) {
+      const { data: listingsData, error: listingsError } = await supabase
+        .from('product_listings')
+        .insert(listingsToInsert)
+        .select()
+
+      if (listingsError) {
+        alert(
+          'Produto criado, mas houve erro ao salvar preços por plataforma: ' +
+            listingsError.message
+        )
+      } else {
+        insertedListings = listingsData || []
+      }
+    }
+
+    setProducts([...products, createdProduct])
+    setListings([...listings, ...insertedListings])
     setNewProduct({ sku: '', name: '', category: '', cost_price: '', weight_kg: '' })
+    setNewListings({})
     setShowNewProduct(false)
   }
 
-  async function handleDeleteProduct(id) {
-    const { error } = await supabase.from('products').delete().eq('id', id)
+  // Nunca exclui de verdade — desativa, preservando histórico de custo e auditoria.
+  async function handleDeactivateProduct(id, name) {
+    const confirmed = window.confirm(
+      `Desativar "${name}"? Isso não apaga o histórico do produto, só remove ele das listagens ativas. Pode ser reativado depois.`
+    )
+    if (!confirmed) return
+
+    const { error } = await supabase
+      .from('products')
+      .update({ active: false })
+      .eq('id', id)
+
     if (error) {
-      alert('Erro ao deletar: ' + error.message)
+      alert('Erro ao desativar: ' + error.message)
       return
     }
-    setProducts(products.filter(p => p.id !== id))
+    setProducts(products.filter((p) => p.id !== id))
   }
 
-  function calculateMargins() {
-    if (selectedPlatform === 'all') return products
+  // Espelha a lógica real do banco (fn_check_fee_coverage): plataforma + categoria
+  // (ou categoria nula como fallback) + faixa de preço + vigência.
+  function findApplicableRule(platformId, category, price) {
+    const today = new Date()
+    return feeRules.find((rule) => {
+      if (rule.platform_id !== platformId) return false
+      if (rule.category !== null && rule.category !== category) return false
 
-    const platform = platforms.find(p => p.id === selectedPlatform)
-    if (!platform) return []
+      const validFrom = new Date(rule.valid_from)
+      const validTo = rule.valid_to ? new Date(rule.valid_to) : null
+      if (today < validFrom) return false
+      if (validTo && today > validTo) return false
 
-    return products.map(product => {
-      const applicableRule = feeRules.find(rule => {
-        if (rule.platform_id !== selectedPlatform) return false
-        if (!rule.valid_from) return false
-        
-        const today = new Date()
-        const validFrom = new Date(rule.valid_from)
-        const validTo = rule.valid_to ? new Date(rule.valid_to) : null
-        
-        if (today < validFrom) return false
-        if (validTo && today > validTo) return false
+      if (rule.price_min !== null && price < rule.price_min) return false
+      if (rule.price_max !== null && price >= rule.price_max) return false
 
-        if (rule.category && rule.category !== product.category) {
-          return false
-        }
-
-        const price = 0
-        if (rule.price_min !== null && price < rule.price_min) return false
-        if (rule.price_max !== null && price >= rule.price_max) return false
-
-        return true
-      })
-
-      let marginInfo = null
-      if (applicableRule) {
-        const simulatedPrice = product.cost_price * 1.5
-        const commission = (simulatedPrice * applicableRule.commission_pct) / 100
-        const fixedFee = applicableRule.fixed_fee || 0
-        const netMargin = simulatedPrice - product.cost_price - commission - fixedFee
-        const marginPct = (netMargin / simulatedPrice) * 100
-
-        marginInfo = {
-          rule: applicableRule,
-          simulatedPrice,
-          commission,
-          fixedFee,
-          netMargin,
-          marginPct,
-        }
-      }
-
-      return {
-        ...product,
-        marginInfo,
-        platformName: platform?.name,
-      }
+      return true
     })
   }
 
-  const displayedProducts = selectedPlatform === 'all' ? products : calculateMargins()
+  function getListing(productId, platformId) {
+    return listings.find((l) => l.product_id === productId && l.platform_id === platformId)
+  }
+
+  // Retorna null quando falta preço de venda OU regra de taxa — nunca inventa valor.
+  function computeMargin(product, platformId) {
+    const listing = getListing(product.id, platformId)
+    if (!listing) return { status: 'sem_preco' }
+
+    const rule = findApplicableRule(platformId, product.category, listing.sale_price)
+    if (!rule) return { status: 'sem_regra' }
+
+    const commission = (listing.sale_price * rule.commission_pct) / 100
+    const fixedFee = rule.fixed_fee || 0
+    const netMargin = listing.sale_price - product.cost_price - commission - fixedFee
+    const marginPct = (netMargin / listing.sale_price) * 100
+
+    return {
+      status: 'ok',
+      salePrice: listing.sale_price,
+      commission,
+      fixedFee,
+      netMargin,
+      marginPct,
+      rule,
+    }
+  }
+
+  const displayedProducts =
+    selectedPlatform === 'all'
+      ? products
+      : products.filter((p) => getListing(p.id, selectedPlatform))
 
   if (loading) {
     return (
@@ -198,17 +242,16 @@ export default function Dashboard({ user, onLogout }) {
               onChange={(e) => setSelectedPlatform(e.target.value)}
               className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
             >
-              <option value="all">Todas as Plataformas</option>
-              {platforms.map(platform => (
-                <option key={platform.id} value={platform.id}>
-                  {platform.name}
+              <option value="all">Todas as plataformas</option>
+              {platforms.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
                 </option>
               ))}
             </select>
-
             <button
-              onClick={() => setShowNewProduct(!showNewProduct)}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+              onClick={() => setShowNewProduct(true)}
+              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
             >
               <Plus className="w-4 h-4" />
               Novo Produto
@@ -217,52 +260,90 @@ export default function Dashboard({ user, onLogout }) {
         </div>
 
         {showNewProduct && (
-          <div className="mb-6 bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Novo Produto</h3>
-            <form onSubmit={handleCreateProduct} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              <input
-                type="text"
-                placeholder="SKU"
-                value={newProduct.sku}
-                onChange={(e) => setNewProduct({ ...newProduct, sku: e.target.value })}
-                required
-                className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-              <input
-                type="text"
-                placeholder="Nome"
-                value={newProduct.name}
-                onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
-                required
-                className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-              <input
-                type="text"
-                placeholder="Categoria"
-                value={newProduct.category}
-                onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
-                required
-                className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-              <input
-                type="number"
-                placeholder="Custo (R$)"
-                value={newProduct.cost_price}
-                onChange={(e) => setNewProduct({ ...newProduct, cost_price: e.target.value })}
-                required
-                step="0.01"
-                min="0"
-                className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-              <input
-                type="number"
-                placeholder="Peso (kg)"
-                value={newProduct.weight_kg}
-                onChange={(e) => setNewProduct({ ...newProduct, weight_kg: e.target.value })}
-                step="0.01"
-                min="0"
-                className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
+          <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+            <form onSubmit={handleCreateProduct} className="space-y-6">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-3">Dados do produto</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <input
+                    type="text"
+                    placeholder="SKU"
+                    value={newProduct.sku}
+                    onChange={(e) => setNewProduct({ ...newProduct, sku: e.target.value })}
+                    required
+                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Nome"
+                    value={newProduct.name}
+                    onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+                    required
+                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Categoria"
+                    value={newProduct.category}
+                    onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
+                    required
+                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <input
+                    type="number"
+                    placeholder="Custo (R$)"
+                    value={newProduct.cost_price}
+                    onChange={(e) => setNewProduct({ ...newProduct, cost_price: e.target.value })}
+                    required
+                    step="0.01"
+                    min="0"
+                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <input
+                    type="number"
+                    placeholder="Peso (kg)"
+                    value={newProduct.weight_kg}
+                    onChange={(e) => setNewProduct({ ...newProduct, weight_kg: e.target.value })}
+                    step="0.01"
+                    min="0"
+                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-1">
+                  Presença por plataforma
+                </h3>
+                <p className="text-xs text-gray-500 mb-3">
+                  Marque as plataformas onde esse produto será vendido e informe o preço de
+                  venda real — sem preço, a margem não pode ser calculada.
+                </p>
+                <div className="space-y-2">
+                  {platforms.map((p) => (
+                    <div key={p.id} className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={!!newListings[p.id]?.enabled}
+                        onChange={() => toggleListingPlatform(p.id)}
+                        className="w-4 h-4 rounded border-gray-300"
+                      />
+                      <span className="w-36 text-sm text-gray-700">{p.name}</span>
+                      <input
+                        type="number"
+                        placeholder="Preço de venda (R$)"
+                        disabled={!newListings[p.id]?.enabled}
+                        value={newListings[p.id]?.sale_price || ''}
+                        onChange={(e) => setListingPrice(p.id, e.target.value)}
+                        step="0.01"
+                        min="0"
+                        className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 disabled:text-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               <div className="flex gap-2">
                 <button
                   type="submit"
@@ -272,7 +353,10 @@ export default function Dashboard({ user, onLogout }) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowNewProduct(false)}
+                  onClick={() => {
+                    setShowNewProduct(false)
+                    setNewListings({})
+                  }}
                   className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg transition-colors"
                 >
                   Cancelar
@@ -301,99 +385,89 @@ export default function Dashboard({ user, onLogout }) {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      SKU
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Nome
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Categoria
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Custo
-                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nome</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Categoria</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Custo</th>
                     {selectedPlatform !== 'all' && (
                       <>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Plataforma
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Margem Líq.
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          % Margem
-                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Preço venda</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Margem Líq.</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">% Margem</th>
                       </>
                     )}
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Ações
-                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {displayedProducts.map((product) => (
-                    <tr key={product.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {product.sku}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {product.name}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {product.category}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        R$ {product.cost_price?.toFixed(2)}
-                      </td>
-                      {selectedPlatform !== 'all' && (
-                        <>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            {product.platformName}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            {product.marginInfo ? (
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                product.marginInfo.netMargin > 0
-                                  ? 'bg-green-100 text-green-800'
-                                  : 'bg-red-100 text-red-800'
-                              }`}>
-                                R$ {product.marginInfo.netMargin.toFixed(2)}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-xs text-orange-600">
-                                <AlertCircle className="w-3 h-3" />
-                                Sem regra
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            {product.marginInfo ? (
-                              <span className={`text-sm font-medium ${
-                                product.marginInfo.marginPct > 10
-                                  ? 'text-green-600'
-                                  : product.marginInfo.marginPct > 0
-                                  ? 'text-yellow-600'
-                                  : 'text-red-600'
-                              }`}>
-                                {product.marginInfo.marginPct.toFixed(1)}%
-                              </span>
-                            ) : (
-                              <span className="text-sm text-gray-400">-</span>
-                            )}
-                          </td>
-                        </>
-                      )}
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <button
-                          onClick={() => handleDeleteProduct(product.id)}
-                          className="text-red-600 hover:text-red-900 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {displayedProducts.map((product) => {
+                    const margin =
+                      selectedPlatform !== 'all' ? computeMargin(product, selectedPlatform) : null
+
+                    return (
+                      <tr key={product.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{product.sku}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{product.name}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.category}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          R$ {product.cost_price?.toFixed(2)}
+                        </td>
+                        {selectedPlatform !== 'all' && (
+                          <>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {margin?.status === 'ok' ? `R$ ${margin.salePrice.toFixed(2)}` : '—'}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              {margin?.status === 'ok' ? (
+                                <span
+                                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                    margin.netMargin > 0
+                                      ? 'bg-green-100 text-green-800'
+                                      : 'bg-red-100 text-red-800'
+                                  }`}
+                                >
+                                  R$ {margin.netMargin.toFixed(2)}
+                                </span>
+                              ) : margin?.status === 'sem_preco' ? (
+                                <span className="text-xs text-gray-400">— sem preço cadastrado</span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-xs text-orange-600">
+                                  <AlertCircle className="w-3 h-3" />
+                                  Sem regra de taxa
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              {margin?.status === 'ok' ? (
+                                <span
+                                  className={`text-sm font-medium ${
+                                    margin.marginPct > 10
+                                      ? 'text-green-600'
+                                      : margin.marginPct > 0
+                                      ? 'text-yellow-600'
+                                      : 'text-red-600'
+                                  }`}
+                                >
+                                  {margin.marginPct.toFixed(1)}%
+                                </span>
+                              ) : (
+                                <span className="text-sm text-gray-400">—</span>
+                              )}
+                            </td>
+                          </>
+                        )}
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                          <button
+                            onClick={() => handleDeactivateProduct(product.id, product.name)}
+                            title="Desativar produto (não apaga o histórico)"
+                            className="text-red-600 hover:text-red-900 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -405,12 +479,11 @@ export default function Dashboard({ user, onLogout }) {
             <div className="flex items-start gap-3">
               <TrendingUp className="w-5 h-5 text-blue-600 mt-0.5" />
               <div>
-                <h4 className="text-sm font-semibold text-blue-900 mb-1">
-                  Simulação de Margem
-                </h4>
+                <h4 className="text-sm font-semibold text-blue-900 mb-1">Como a margem é calculada</h4>
                 <p className="text-sm text-blue-700">
-                  Os cálculos acima usam um preço de venda simulado (1.5x o custo) para demonstração. 
-                  Na versão completa, você poderá cadastrar o preço real de venda em cada plataforma.
+                  Usa o preço de venda real cadastrado por plataforma e a regra de taxa vigente
+                  (comissão + taxa fixa) para essa categoria. Sem preço ou sem regra cadastrada,
+                  o sistema mostra "—" em vez de um valor estimado.
                 </p>
               </div>
             </div>
