@@ -10,9 +10,12 @@ export default function Dashboard({ user, onLogout }) {
   const [costComponents, setCostComponents] = useState([])
   const [listingCostComponents, setListingCostComponents] = useState([])
   const [companyId, setCompanyId] = useState(null)
+  const [userRole, setUserRole] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showNewProduct, setShowNewProduct] = useState(false)
   const [selectedPlatform, setSelectedPlatform] = useState('all')
+  // Form de edição de taxa (só super_admin) — { [ruleId]: { commission_pct, fixed_fee, source_url } }
+  const [editRuleForm, setEditRuleForm] = useState({})
   const [newProduct, setNewProduct] = useState({
     sku: '',
     name: '',
@@ -40,12 +43,13 @@ export default function Dashboard({ user, onLogout }) {
       // produto é bloqueado pela política de RLS (que exige company_id correto).
       const { data: userRow, error: userError } = await supabase
         .from('users')
-        .select('company_id')
+        .select('company_id, role')
         .eq('id', user.id)
         .single()
 
       if (userError) throw userError
       setCompanyId(userRow?.company_id || null)
+      setUserRole(userRow?.role || null)
 
       const [productsRes, platformsRes, rulesRes, listingsRes, costComponentsRes, listingCostComponentsRes] = await Promise.all([
         supabase.from('products').select('*').eq('active', true),
@@ -76,6 +80,79 @@ export default function Dashboard({ user, onLogout }) {
     }
   }
 
+  async function handleUpdateRule(oldRule) {
+    const form = editRuleForm[oldRule.id]
+    if (!form) return
+    if (!form.source_url) {
+      alert('Informe a fonte (link oficial ou nota "ESTIMATIVA - motivo") antes de salvar.')
+      return
+    }
+
+    const today = new Date().toISOString().slice(0, 10)
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+
+    // 1. Fecha a vigência da regra atual (nunca sobrescreve)
+    const { error: closeError } = await supabase
+      .from('platform_fee_rules')
+      .update({ valid_to: yesterday })
+      .eq('id', oldRule.id)
+
+    if (closeError) {
+      alert('Erro ao encerrar vigência da regra antiga: ' + closeError.message)
+      return
+    }
+
+    // 2. Cria a nova regra a partir de hoje
+    const { data: newRuleData, error: insertError } = await supabase
+      .from('platform_fee_rules')
+      .insert([
+        {
+          platform_id: oldRule.platform_id,
+          category: oldRule.category,
+          listing_type: oldRule.listing_type,
+          reputation_level: oldRule.reputation_level,
+          price_min: oldRule.price_min,
+          price_max: oldRule.price_max,
+          commission_pct: parseFloat(form.commission_pct),
+          fixed_fee: parseFloat(form.fixed_fee),
+          valid_from: today,
+          source_url: form.source_url,
+        },
+      ])
+      .select()
+
+    if (insertError) {
+      alert('Erro ao criar nova versão da regra: ' + insertError.message)
+      return
+    }
+
+    // Atualiza o estado local: fecha a antiga, adiciona a nova
+    setFeeRules((prev) => [
+      ...prev.map((r) => (r.id === oldRule.id ? { ...r, valid_to: yesterday } : r)),
+      ...(newRuleData || []),
+    ])
+    setEditRuleForm((prev) => ({ ...prev, [oldRule.id]: null }))
+  }
+
+  async function handleMarkRuleConfirmed(rule, sourceUrl) {
+    if (!sourceUrl) {
+      alert('Informe o link da fonte oficial.')
+      return
+    }
+    const { error } = await supabase
+      .from('platform_fee_rules')
+      .update({ source_url: sourceUrl })
+      .eq('id', rule.id)
+
+    if (error) {
+      alert('Erro ao confirmar regra: ' + error.message)
+      return
+    }
+    setFeeRules((prev) =>
+      prev.map((r) => (r.id === rule.id ? { ...r, source_url: sourceUrl } : r))
+    )
+  }
+
   function toggleListingPlatform(platformId) {
     setNewListings((prev) => ({
       ...prev,
@@ -91,6 +168,22 @@ export default function Dashboard({ user, onLogout }) {
       ...prev,
       [platformId]: { ...prev[platformId], sale_price: value },
     }))
+  }
+
+  function toggleListingCost(platformId, costComponentId) {
+    setNewListings((prev) => {
+      const current = prev[platformId]?.selectedCosts || []
+      const exists = current.includes(costComponentId)
+      return {
+        ...prev,
+        [platformId]: {
+          ...prev[platformId],
+          selectedCosts: exists
+            ? current.filter((id) => id !== costComponentId)
+            : [...current, costComponentId],
+        },
+      }
+    })
   }
 
   async function handleCreateProduct(e) {
@@ -146,6 +239,34 @@ export default function Dashboard({ user, onLogout }) {
         )
       } else {
         insertedListings = listingsData || []
+
+        // Vincula os custos adicionais marcados no cadastro a cada listing recém-criado
+        const costLinksToInsert = []
+        insertedListings.forEach((listing) => {
+          const selectedCosts = newListings[listing.platform_id]?.selectedCosts || []
+          selectedCosts.forEach((costComponentId) => {
+            costLinksToInsert.push({
+              product_listing_id: listing.id,
+              cost_component_id: costComponentId,
+            })
+          })
+        })
+
+        if (costLinksToInsert.length > 0) {
+          const { data: costLinksData, error: costLinksError } = await supabase
+            .from('listing_cost_components')
+            .insert(costLinksToInsert)
+            .select()
+
+          if (costLinksError) {
+            alert(
+              'Produto e preços salvos, mas houve erro ao vincular custos adicionais: ' +
+                costLinksError.message
+            )
+          } else {
+            setListingCostComponents((prev) => [...prev, ...(costLinksData || [])])
+          }
+        }
       }
     }
 
@@ -444,28 +565,60 @@ export default function Dashboard({ user, onLogout }) {
                 </p>
                 <div className="space-y-2">
                   {platforms.map((p) => (
-                    <div key={p.id} className="flex items-center gap-3">
-                      <input
-                        type="checkbox"
-                        checked={!!newListings[p.id]?.enabled}
-                        onChange={() => toggleListingPlatform(p.id)}
-                        className="w-4 h-4 rounded border-gray-300"
-                      />
-                      <span className="w-36 text-sm text-gray-700">{p.name}</span>
-                      <input
-                        type="number"
-                        placeholder="Preço de venda (R$)"
-                        disabled={!newListings[p.id]?.enabled}
-                        value={newListings[p.id]?.sale_price || ''}
-                        onChange={(e) => setListingPrice(p.id, e.target.value)}
-                        step="0.01"
-                        min="0"
-                        className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 disabled:text-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
+                    <div key={p.id} className="border border-gray-100 rounded-lg p-2">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={!!newListings[p.id]?.enabled}
+                          onChange={() => toggleListingPlatform(p.id)}
+                          className="w-4 h-4 rounded border-gray-300"
+                        />
+                        <span className="w-36 text-sm text-gray-700">{p.name}</span>
+                        <input
+                          type="number"
+                          placeholder="Preço de venda (R$)"
+                          disabled={!newListings[p.id]?.enabled}
+                          value={newListings[p.id]?.sale_price || ''}
+                          onChange={(e) => setListingPrice(p.id, e.target.value)}
+                          step="0.01"
+                          min="0"
+                          className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 disabled:text-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                      </div>
+                      {newListings[p.id]?.enabled && costComponents.length > 0 && (
+                        <div className="ml-7 mt-2 flex flex-wrap gap-2">
+                          {costComponents.map((c) => (
+                            <label
+                              key={c.id}
+                              className="flex items-center gap-1 text-xs bg-gray-50 rounded px-2 py-1 cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={
+                                  !!newListings[p.id]?.selectedCosts?.includes(c.id)
+                                }
+                                onChange={() => toggleListingCost(p.id, c.id)}
+                                className="w-3 h-3"
+                              />
+                              {c.name} (
+                              {c.calc_type === 'percentage'
+                                ? `${c.default_value}%`
+                                : `R$${c.default_value}`}
+                              )
+                            </label>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
               </div>
+
+              <p className="text-xs text-gray-400">
+                Precisa de um tipo de custo que ainda não existe (comissão de afiliado, ads,
+                etc.)? Cadastre o produto primeiro e adicione o custo direto no detalhe dele
+                (clique na linha do produto na tabela).
+              </p>
 
               <div className="flex gap-2">
                 <button
@@ -703,6 +856,121 @@ export default function Dashboard({ user, onLogout }) {
                                               </span>
                                             </div>
                                           </div>
+
+                                          {/* Edição de taxa — só super_admin, afeta todas as empresas que usam essa regra */}
+                                          {userRole === 'super_admin' && (
+                                            <div
+                                              className="mb-3 border-t pt-2"
+                                              onClick={(e) => e.stopPropagation()}
+                                            >
+                                              {editRuleForm[m.rule.id] ? (
+                                                <div className="space-y-1 bg-yellow-50 rounded p-2">
+                                                  <p className="text-[10px] text-yellow-800 mb-1">
+                                                    ⚠️ Isso cria uma nova versão da regra a partir de
+                                                    hoje e afeta todos os produtos desta categoria
+                                                    nesta plataforma, em qualquer empresa.
+                                                  </p>
+                                                  <div className="flex gap-1">
+                                                    <input
+                                                      type="number"
+                                                      placeholder="Comissão %"
+                                                      value={editRuleForm[m.rule.id]?.commission_pct ?? m.rule.commission_pct}
+                                                      onChange={(e) =>
+                                                        setEditRuleForm((prev) => ({
+                                                          ...prev,
+                                                          [m.rule.id]: {
+                                                            ...prev[m.rule.id],
+                                                            commission_pct: e.target.value,
+                                                          },
+                                                        }))
+                                                      }
+                                                      className="text-xs border border-gray-300 rounded px-2 py-1 w-20"
+                                                    />
+                                                    <input
+                                                      type="number"
+                                                      placeholder="Taxa fixa R$"
+                                                      value={editRuleForm[m.rule.id]?.fixed_fee ?? m.rule.fixed_fee}
+                                                      onChange={(e) =>
+                                                        setEditRuleForm((prev) => ({
+                                                          ...prev,
+                                                          [m.rule.id]: {
+                                                            ...prev[m.rule.id],
+                                                            fixed_fee: e.target.value,
+                                                          },
+                                                        }))
+                                                      }
+                                                      className="text-xs border border-gray-300 rounded px-2 py-1 w-20"
+                                                    />
+                                                  </div>
+                                                  <input
+                                                    type="text"
+                                                    placeholder="Fonte (link oficial ou nota)"
+                                                    value={editRuleForm[m.rule.id]?.source_url || ''}
+                                                    onChange={(e) =>
+                                                      setEditRuleForm((prev) => ({
+                                                        ...prev,
+                                                        [m.rule.id]: {
+                                                          ...prev[m.rule.id],
+                                                          source_url: e.target.value,
+                                                        },
+                                                      }))
+                                                    }
+                                                    className="text-xs border border-gray-300 rounded px-2 py-1 w-full"
+                                                  />
+                                                  <div className="flex gap-1">
+                                                    <button
+                                                      onClick={() => handleUpdateRule(m.rule)}
+                                                      className="text-xs bg-yellow-600 text-white px-2 py-1 rounded hover:bg-yellow-700"
+                                                    >
+                                                      Salvar nova versão
+                                                    </button>
+                                                    <button
+                                                      onClick={() =>
+                                                        setEditRuleForm((prev) => ({
+                                                          ...prev,
+                                                          [m.rule.id]: null,
+                                                        }))
+                                                      }
+                                                      className="text-xs bg-gray-200 px-2 py-1 rounded hover:bg-gray-300"
+                                                    >
+                                                      Cancelar
+                                                    </button>
+                                                  </div>
+                                                </div>
+                                              ) : (
+                                                <div className="flex gap-2">
+                                                  <button
+                                                    onClick={() =>
+                                                      setEditRuleForm((prev) => ({
+                                                        ...prev,
+                                                        [m.rule.id]: {
+                                                          commission_pct: m.rule.commission_pct,
+                                                          fixed_fee: m.rule.fixed_fee,
+                                                          source_url: '',
+                                                        },
+                                                      }))
+                                                    }
+                                                    className="text-xs text-blue-600 hover:underline"
+                                                  >
+                                                    editar taxa
+                                                  </button>
+                                                  {isEstimate && (
+                                                    <button
+                                                      onClick={() => {
+                                                        const url = window.prompt(
+                                                          'Link da fonte oficial:'
+                                                        )
+                                                        if (url) handleMarkRuleConfirmed(m.rule, url)
+                                                      }}
+                                                      className="text-xs text-green-600 hover:underline"
+                                                    >
+                                                      marcar como confirmada
+                                                    </button>
+                                                  )}
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
 
                                           {/* Custos adicionais aplicados — remover */}
                                           {listingLccs.length > 0 && (
