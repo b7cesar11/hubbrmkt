@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { Plus, Trash2, Pencil, Package, TrendingUp, AlertCircle } from 'lucide-react'
+import PromotionsView from './PromotionsView'
 
 export default function Dashboard({ user, onLogout }) {
   const [products, setProducts] = useState([])
@@ -793,6 +794,16 @@ export default function Dashboard({ user, onLogout }) {
               }`}
             >
               Regras de Taxa
+            </button>
+            <button
+              onClick={() => setActiveTab('promocoes')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'promocoes'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Promoções
             </button>
           </div>
         )}
@@ -1750,6 +1761,10 @@ export default function Dashboard({ user, onLogout }) {
               </table>
             </div>
           </div>
+        )}
+
+        {activeTab === 'promocoes' && userRole === 'super_admin' && (
+          <PromotionsView userRole={userRole} />
         )}
       </main>
     </div>
