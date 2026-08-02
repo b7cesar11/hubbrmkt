@@ -7,6 +7,7 @@ export default function Dashboard({ user, onLogout }) {
   const [platforms, setPlatforms] = useState([])
   const [feeRules, setFeeRules] = useState([])
   const [listings, setListings] = useState([]) // product_listings reais
+  const [companyId, setCompanyId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showNewProduct, setShowNewProduct] = useState(false)
   const [selectedPlatform, setSelectedPlatform] = useState('all')
@@ -26,6 +27,17 @@ export default function Dashboard({ user, onLogout }) {
 
   async function loadData() {
     try {
+      // Busca o company_id real do usuário logado — sem isso, o cadastro de
+      // produto é bloqueado pela política de RLS (que exige company_id correto).
+      const { data: userRow, error: userError } = await supabase
+        .from('users')
+        .select('company_id')
+        .eq('id', user.id)
+        .single()
+
+      if (userError) throw userError
+      setCompanyId(userRow?.company_id || null)
+
       const [productsRes, platformsRes, rulesRes, listingsRes] = await Promise.all([
         supabase.from('products').select('*').eq('active', true),
         supabase.from('platforms').select('*'),
@@ -69,8 +81,16 @@ export default function Dashboard({ user, onLogout }) {
   async function handleCreateProduct(e) {
     e.preventDefault()
 
+    if (!companyId) {
+      alert(
+        'Não foi possível identificar a empresa do usuário logado. Recarregue a página e tente de novo.'
+      )
+      return
+    }
+
     const productData = {
       ...newProduct,
+      company_id: companyId,
       cost_price: parseFloat(newProduct.cost_price),
       weight_kg: newProduct.weight_kg ? parseFloat(newProduct.weight_kg) : null,
       active: true,
