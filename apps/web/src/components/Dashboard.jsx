@@ -10,6 +10,7 @@ export default function Dashboard({ user, onLogout }) {
   const [listings, setListings] = useState([]) // product_listings reais
   const [costComponents, setCostComponents] = useState([])
   const [listingCostComponents, setListingCostComponents] = useState([])
+  const [promotions, setPromotions] = useState([])
   const [coverageGaps, setCoverageGaps] = useState([])
   const [companyId, setCompanyId] = useState(null)
   const [userRole, setUserRole] = useState(null)
@@ -73,7 +74,7 @@ export default function Dashboard({ user, onLogout }) {
       setCompanyId(userRow?.company_id || null)
       setUserRole(userRow?.role || null)
 
-      const [productsRes, platformsRes, rulesRes, listingsRes, costComponentsRes, listingCostComponentsRes, gapsRes] = await Promise.all([
+      const [productsRes, platformsRes, rulesRes, listingsRes, costComponentsRes, listingCostComponentsRes, gapsRes, promotionsRes] = await Promise.all([
         supabase.from('products').select('*'), // busca todos — filtro de status é feito na tela, não na query
         supabase.from('platforms').select('*'),
         supabase.from('platform_fee_rules').select('*'),
@@ -81,6 +82,7 @@ export default function Dashboard({ user, onLogout }) {
         supabase.from('cost_components').select('*').eq('active', true),
         supabase.from('listing_cost_components').select('*'),
         supabase.from('category_coverage_gaps').select('*').eq('status', 'pending_validation'),
+        supabase.from('platform_promotions').select('*'),
       ])
 
       if (productsRes.error) throw productsRes.error
@@ -90,6 +92,7 @@ export default function Dashboard({ user, onLogout }) {
       if (costComponentsRes.error) throw costComponentsRes.error
       if (listingCostComponentsRes.error) throw listingCostComponentsRes.error
       if (gapsRes.error) throw gapsRes.error
+      if (promotionsRes.error) throw promotionsRes.error
 
       setProducts(productsRes.data || [])
       setPlatforms(platformsRes.data || [])
@@ -98,6 +101,7 @@ export default function Dashboard({ user, onLogout }) {
       setCoverageGaps(gapsRes.data || [])
       setCostComponents(costComponentsRes.data || [])
       setListingCostComponents(listingCostComponentsRes.data || [])
+      setPromotions(promotionsRes.data || [])
     } catch (err) {
       console.error('Erro ao carregar dados:', err)
     } finally {
@@ -545,6 +549,15 @@ export default function Dashboard({ user, onLogout }) {
     })
   }
 
+  function getApplicablePromotions(platformId, category) {
+    const today = new Date().toISOString().slice(0, 10)
+    return promotions.filter((promo) => {
+      if (promo.platform_id !== platformId) return false
+      if (promo.category !== null && promo.category !== category) return false
+      return today >= promo.starts_at && today <= promo.ends_at
+    })
+  }
+
   function getListing(productId, platformId) {
     return listings.find((l) => l.product_id === productId && l.platform_id === platformId)
   }
@@ -626,8 +639,30 @@ export default function Dashboard({ user, onLogout }) {
     const rule = findApplicableRule(platformId, product.category, listing.sale_price)
     if (!rule) return { status: 'sem_regra' }
 
-    const commission = (listing.sale_price * rule.commission_pct) / 100
+    let commission = (listing.sale_price * rule.commission_pct) / 100
     const fixedFee = rule.fixed_fee || 0
+
+    // Promoções ativas da plataforma/categoria — conecta automaticamente com
+    // qualquer produto que bater, existente ou futuro, igual às regras de taxa.
+    const applicablePromotions = getApplicablePromotions(platformId, product.category)
+    const promoBenefits = []
+    applicablePromotions.forEach((promo) => {
+      if (promo.benefit_type === 'commission_exemption') {
+        const reduction = promo.value_pct ? commission * (promo.value_pct / 100) : commission
+        commission -= reduction
+        promoBenefits.push({ name: 'Isenção de comissão (promoção)', amount: reduction })
+      } else if (promo.benefit_type === 'shipping_subsidy') {
+        const amount =
+          promo.value_fixed || (promo.value_pct ? (listing.sale_price * promo.value_pct) / 100 : 0)
+        if (amount > 0) promoBenefits.push({ name: 'Subsídio de frete (promoção)', amount })
+      } else if (promo.benefit_type === 'cashback') {
+        const amount =
+          promo.value_fixed || (promo.value_pct ? (listing.sale_price * promo.value_pct) / 100 : 0)
+        if (amount > 0) promoBenefits.push({ name: 'Cashback (promoção)', amount })
+      }
+      // 'other' fica só informativo — não entra em cálculo automático, valor não é padronizado
+    })
+    const promoBenefitsTotal = promoBenefits.reduce((sum, b) => sum + b.amount, 0)
 
     // Custos adicionais vinculados a este listing específico (afiliado, marketing, ads...)
     const appliedCosts = listingCostComponents
@@ -645,7 +680,12 @@ export default function Dashboard({ user, onLogout }) {
     const additionalCostsTotal = appliedCosts.reduce((sum, c) => sum + c.amount, 0)
 
     const netMargin =
-      listing.sale_price - product.cost_price - commission - fixedFee - additionalCostsTotal
+      listing.sale_price -
+      product.cost_price -
+      commission -
+      fixedFee -
+      additionalCostsTotal +
+      promoBenefitsTotal
     const marginPct = (netMargin / listing.sale_price) * 100
 
     return {
@@ -655,6 +695,8 @@ export default function Dashboard({ user, onLogout }) {
       fixedFee,
       appliedCosts,
       additionalCostsTotal,
+      promoBenefits,
+      promoBenefitsTotal,
       netMargin,
       marginPct,
       rule,
@@ -1092,6 +1134,11 @@ export default function Dashboard({ user, onLogout }) {
                                         -R$ {margin.additionalCostsTotal.toFixed(2)})
                                       </span>
                                     )}
+                                    {margin.promoBenefits.length > 0 && (
+                                      <span className="text-[11px] text-green-600 mt-1">
+                                        🎁 promoção ativa (+R$ {margin.promoBenefitsTotal.toFixed(2)})
+                                      </span>
+                                    )}
                                   </div>
                                 ) : margin?.status === 'sem_preco' ? (
                                   <span className="text-xs text-gray-400">— sem preço cadastrado</span>
@@ -1257,6 +1304,12 @@ export default function Dashboard({ user, onLogout }) {
                                                   {c.calcType === 'percentage' ? `(${c.value}%)` : '(fixo)'}
                                                 </span>
                                                 <span>- R$ {c.amount.toFixed(2)}</span>
+                                              </div>
+                                            ))}
+                                            {m.promoBenefits.map((b, i) => (
+                                              <div key={i} className="flex justify-between text-green-700">
+                                                <span>🎁 {b.name}</span>
+                                                <span>+ R$ {b.amount.toFixed(2)}</span>
                                               </div>
                                             ))}
                                             <div className="flex justify-between font-semibold text-gray-900 border-t pt-1 mt-1">
