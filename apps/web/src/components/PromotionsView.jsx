@@ -124,6 +124,24 @@ export default function PromotionsView({ userRole }) {
     setPromotions(promotions.map((p) => (p.id === promo.id ? { ...p, ends_at: today } : p)))
   }
 
+  // Exclusão real só é permitida pra promoções que ainda não começaram —
+  // nada depende dela ainda, então não há histórico pra preservar.
+  async function handleDeletePromotion(promo) {
+    const confirmed = window.confirm(
+      'Excluir essa promoção agendada? Essa ação não pode ser desfeita.'
+    )
+    if (!confirmed) return
+
+    const { error } = await supabase.from('platform_promotions').delete().eq('id', promo.id)
+
+    if (error) {
+      alert('Erro ao excluir promoção: ' + error.message)
+      return
+    }
+
+    setPromotions(promotions.filter((p) => p.id !== promo.id))
+  }
+
   if (loading) {
     return <p className="text-sm text-gray-500 py-8 text-center">Carregando promoções...</p>
   }
@@ -241,6 +259,7 @@ export default function PromotionsView({ userRole }) {
       )}
 
       <div className="bg-white rounded-xl shadow-md overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
           <thead className="bg-gray-50">
             <tr>
@@ -302,7 +321,7 @@ export default function PromotionsView({ userRole }) {
                       )}
                     </td>
                     {userRole === 'super_admin' && (
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 space-x-3">
                         {status === 'Ativa' && (
                           <button
                             onClick={() => handleEarlyTermination(promo)}
@@ -311,6 +330,12 @@ export default function PromotionsView({ userRole }) {
                             encerrar antecipadamente
                           </button>
                         )}
+                        <button
+                          onClick={() => handleDeletePromotion(promo)}
+                          className="text-xs text-red-600 hover:underline"
+                        >
+                          excluir
+                        </button>
                       </td>
                     )}
                   </tr>
@@ -319,6 +344,7 @@ export default function PromotionsView({ userRole }) {
             )}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   )
