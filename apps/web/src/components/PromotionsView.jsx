@@ -15,6 +15,7 @@ export default function PromotionsView({ userRole }) {
   const [showForm, setShowForm] = useState(false)
   const [newPromo, setNewPromo] = useState({
     platform_id: '',
+    category: '',
     benefit_type: 'commission_exemption',
     value_pct: '',
     value_fixed: '',
@@ -73,6 +74,7 @@ export default function PromotionsView({ userRole }) {
       .insert([
         {
           platform_id: newPromo.platform_id, // é UUID, nunca converter pra número
+          category: newPromo.category || null,
           benefit_type: newPromo.benefit_type,
           value_pct: newPromo.value_pct ? parseFloat(newPromo.value_pct) : null,
           value_fixed: newPromo.value_fixed ? parseFloat(newPromo.value_fixed) : null,
@@ -91,6 +93,7 @@ export default function PromotionsView({ userRole }) {
     setPromotions([...(data || []), ...promotions])
     setNewPromo({
       platform_id: '',
+      category: '',
       benefit_type: 'commission_exemption',
       value_pct: '',
       value_fixed: '',
@@ -141,8 +144,13 @@ export default function PromotionsView({ userRole }) {
 
       {showForm && userRole === 'super_admin' && (
         <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+          <p className="text-xs text-gray-500 mb-3">
+            Se marcar uma categoria, a promoção aplica automaticamente em todos os produtos
+            (já cadastrados ou futuros) dessa categoria nessa plataforma — igual ao motor de
+            taxas. Deixe em branco pra aplicar a todas as categorias da plataforma.
+          </p>
           <form onSubmit={handleSubmit} className="space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <select
                 value={newPromo.platform_id}
                 onChange={(e) => setNewPromo({ ...newPromo, platform_id: e.target.value })}
@@ -156,6 +164,13 @@ export default function PromotionsView({ userRole }) {
                   </option>
                 ))}
               </select>
+              <input
+                type="text"
+                placeholder="Categoria (vazio = todas)"
+                value={newPromo.category}
+                onChange={(e) => setNewPromo({ ...newPromo, category: e.target.value })}
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+              />
               <select
                 value={newPromo.benefit_type}
                 onChange={(e) => setNewPromo({ ...newPromo, benefit_type: e.target.value })}
@@ -230,6 +245,7 @@ export default function PromotionsView({ userRole }) {
           <thead className="bg-gray-50">
             <tr>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plataforma</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Categoria</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Benefício</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Valor</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Elegibilidade</th>
@@ -243,7 +259,7 @@ export default function PromotionsView({ userRole }) {
           <tbody className="divide-y divide-gray-200">
             {promotions.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={8} className="px-4 py-6 text-center text-gray-400">
                   Nenhuma promoção cadastrada ainda.
                 </td>
               </tr>
@@ -256,6 +272,7 @@ export default function PromotionsView({ userRole }) {
                     className={isExpiringSoon(promo) ? 'bg-yellow-50' : 'hover:bg-gray-50'}
                   >
                     <td className="px-4 py-3">{getPlatformName(promo.platform_id)}</td>
+                    <td className="px-4 py-3">{promo.category || 'Todas'}</td>
                     <td className="px-4 py-3">{BENEFIT_LABELS[promo.benefit_type] || promo.benefit_type}</td>
                     <td className="px-4 py-3">
                       {promo.value_pct ? `${promo.value_pct}%` : ''}
