@@ -19,7 +19,10 @@ export default function Dashboard({ user, onLogout }) {
   const [editingProductId, setEditingProductId] = useState(null) // null = modo criação
   const [selectedPlatform, setSelectedPlatform] = useState('all')
   const [showGaps, setShowGaps] = useState(false)
-  const [activeTab, setActiveTab] = useState('produtos') // produtos | regras
+  const [simProductId, setSimProductId] = useState('')
+  const [simPlatformId, setSimPlatformId] = useState('')
+  const [simScenarios, setSimScenarios] = useState(['10', '20', '30'])
+  const [activeTab, setActiveTab] = useState('visao_geral') // visao_geral | produtos | regras | promocoes
   // Form de nova regra de taxa (do zero, ou resolvendo uma lacuna)
   const [showNewRuleForm, setShowNewRuleForm] = useState(false)
   const [resolvingGapId, setResolvingGapId] = useState(null)
@@ -115,6 +118,40 @@ export default function Dashboard({ user, onLogout }) {
     if (!form.source_url) {
       alert('Informe a fonte (link oficial ou nota "ESTIMATIVA - motivo") antes de salvar.')
       return
+    }
+
+    // Aviso de impacto: quantos produtos desta empresa usam essa regra hoje,
+    // e qual seria a margem média antes/depois da mudança.
+    const affected = []
+    products.forEach((product) => {
+      const m = computeMargin(product, oldRule.platform_id)
+      if (m.status === 'ok' && m.rule.id === oldRule.id) {
+        affected.push({ product, listing: getListing(product.id, oldRule.platform_id) })
+      }
+    })
+
+    if (affected.length > 0) {
+      const avgBefore =
+        affected.reduce((sum, a) => sum + computeMargin(a.product, oldRule.platform_id).marginPct, 0) /
+        affected.length
+
+      const newCommissionPct = parseFloat(form.commission_pct)
+      const newFixedFee = parseFloat(form.fixed_fee)
+      const avgAfter =
+        affected.reduce((sum, a) => {
+          const price = a.listing.sale_price
+          const commission = (price * newCommissionPct) / 100
+          const simulatedMargin = price - a.product.cost_price - commission - newFixedFee
+          return sum + (simulatedMargin / price) * 100
+        }, 0) / affected.length
+
+      const confirmed = window.confirm(
+        `⚠️ Essa mudança afeta ${affected.length} produto(s) desta empresa que usam essa regra.\n\n` +
+          `Margem média hoje: ${avgBefore.toFixed(1)}%\n` +
+          `Margem média estimada com os novos valores: ${avgAfter.toFixed(1)}%\n\n` +
+          `Confirma a mudança? (fica registrada como nova versão, a regra atual é preservada no histórico)`
+      )
+      if (!confirmed) return
     }
 
     const today = new Date().toISOString().slice(0, 10)
@@ -815,8 +852,17 @@ export default function Dashboard({ user, onLogout }) {
           </div>
         )}
 
-        {userRole === 'super_admin' && (
-          <div className="mb-6 flex gap-1 border-b border-gray-200">
+        <div className="mb-6 flex gap-1 border-b border-gray-200">
+            <button
+              onClick={() => setActiveTab('visao_geral')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'visao_geral'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Visão Geral
+            </button>
             <button
               onClick={() => setActiveTab('produtos')}
               className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -827,6 +873,7 @@ export default function Dashboard({ user, onLogout }) {
             >
               Produtos
             </button>
+            {userRole === 'super_admin' && (
             <button
               onClick={() => setActiveTab('regras')}
               className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -837,6 +884,8 @@ export default function Dashboard({ user, onLogout }) {
             >
               Regras de Taxa
             </button>
+            )}
+            {userRole === 'super_admin' && (
             <button
               onClick={() => setActiveTab('promocoes')}
               className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -847,8 +896,139 @@ export default function Dashboard({ user, onLogout }) {
             >
               Promoções
             </button>
+            )}
+            <button
+              onClick={() => setActiveTab('simulador')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'simulador'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Simulador
+            </button>
           </div>
-        )}
+
+        {activeTab === 'visao_geral' && (() => {
+          const activeProducts = products.filter((p) => p.active)
+          const results = []
+          activeProducts.forEach((product) => {
+            platforms.forEach((platform) => {
+              const m = computeMargin(product, platform.id)
+              results.push({ product, platform, m })
+            })
+          })
+          const okResults = results.filter((r) => r.m.status === 'ok')
+          const pendingCount = results.filter((r) => r.m.status === 'sem_regra').length
+
+          const avgMargin =
+            okResults.length > 0
+              ? okResults.reduce((s, r) => s + r.m.marginPct, 0) / okResults.length
+              : null
+
+          const best = okResults.reduce(
+            (acc, r) => (!acc || r.m.marginPct > acc.m.marginPct ? r : acc),
+            null
+          )
+          const worst = okResults.reduce(
+            (acc, r) => (!acc || r.m.marginPct < acc.m.marginPct ? r : acc),
+            null
+          )
+
+          const platformAverages = platforms.map((platform) => {
+            const platformResults = okResults.filter((r) => r.platform.id === platform.id)
+            const avg =
+              platformResults.length > 0
+                ? platformResults.reduce((s, r) => s + r.m.marginPct, 0) / platformResults.length
+                : null
+            return { platform, avg, count: platformResults.length }
+          })
+          const maxPlatformAvg = Math.max(...platformAverages.map((p) => p.avg || 0), 1)
+
+          return (
+            <div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div className="bg-white rounded-xl shadow-md p-4">
+                  <p className="text-xs text-gray-500 mb-1">Produtos ativos</p>
+                  <p className="text-2xl font-semibold text-gray-900">{activeProducts.length}</p>
+                </div>
+                <div className="bg-white rounded-xl shadow-md p-4">
+                  <p className="text-xs text-gray-500 mb-1">Margem média geral</p>
+                  <p className="text-2xl font-semibold text-gray-900">
+                    {avgMargin !== null ? `${avgMargin.toFixed(1)}%` : '—'}
+                  </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-md p-4">
+                  <p className="text-xs text-gray-500 mb-1">Melhor margem</p>
+                  {best ? (
+                    <>
+                      <p className="text-sm font-semibold text-green-700">
+                        {best.product.name} — {best.m.marginPct.toFixed(1)}%
+                      </p>
+                      <p className="text-xs text-gray-400">{best.platform.name}</p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-gray-400">—</p>
+                  )}
+                </div>
+                <div
+                  className={`bg-white rounded-xl shadow-md p-4 cursor-pointer hover:shadow-lg transition-shadow ${
+                    pendingCount > 0 ? 'ring-1 ring-orange-200' : ''
+                  }`}
+                  onClick={() => pendingCount > 0 && setShowGaps(true)}
+                >
+                  <p className="text-xs text-gray-500 mb-1">Produtos com pendência</p>
+                  <p
+                    className={`text-2xl font-semibold ${
+                      pendingCount > 0 ? 'text-orange-600' : 'text-gray-900'
+                    }`}
+                  >
+                    {pendingCount}
+                  </p>
+                </div>
+              </div>
+
+              {worst && worst.m.marginPct < 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-red-800">
+                      Margem negativa detectada: {worst.product.name} em {worst.platform.name} (
+                      {worst.m.marginPct.toFixed(1)}%)
+                    </p>
+                    <p className="text-xs text-red-600">
+                      Esse produto está dando prejuízo nessa plataforma — vale revisar preço ou custo.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-white rounded-xl shadow-md p-6">
+                <h3 className="text-sm font-semibold text-gray-900 mb-4">Margem média por plataforma</h3>
+                <div className="space-y-3">
+                  {platformAverages.map(({ platform, avg, count }) => (
+                    <div key={platform.id}>
+                      <div className="flex justify-between text-xs text-gray-500 mb-1">
+                        <span>
+                          {platform.name} {count > 0 ? `(${count} produto${count > 1 ? 's' : ''})` : ''}
+                        </span>
+                        <span>{avg !== null ? `${avg.toFixed(1)}%` : 'sem dado'}</span>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-2">
+                        {avg !== null && (
+                          <div
+                            className="bg-blue-500 h-2 rounded-full"
+                            style={{ width: `${Math.max((avg / maxPlatformAvg) * 100, 2)}%` }}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
 
         {activeTab === 'produtos' && (
         <>
@@ -1819,6 +1999,139 @@ export default function Dashboard({ user, onLogout }) {
         {activeTab === 'promocoes' && userRole === 'super_admin' && (
           <PromotionsView userRole={userRole} />
         )}
+
+        {activeTab === 'simulador' && (() => {
+          const simProduct = products.find((p) => p.id === simProductId)
+          const productPlatformOptions = simProduct
+            ? platforms.filter((pl) => getListing(simProduct.id, pl.id))
+            : []
+          const baseMargin =
+            simProduct && simPlatformId ? computeMargin(simProduct, simPlatformId) : null
+
+          return (
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900 mb-4">Simulador de Comissionamento</h2>
+              <p className="text-sm text-gray-500 mb-4">
+                Teste cenários de comissão de creator/afiliado sem alterar nenhum dado real.
+              </p>
+
+              <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                  <select
+                    value={simProductId}
+                    onChange={(e) => {
+                      setSimProductId(e.target.value)
+                      setSimPlatformId('')
+                    }}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  >
+                    <option value="">Selecione um produto...</option>
+                    {products
+                      .filter((p) => p.active)
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} ({p.sku})
+                        </option>
+                      ))}
+                  </select>
+                  <select
+                    value={simPlatformId}
+                    onChange={(e) => setSimPlatformId(e.target.value)}
+                    disabled={!simProduct}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100"
+                  >
+                    <option value="">Selecione a plataforma...</option>
+                    {productPlatformOptions.map((pl) => (
+                      <option key={pl.id} value={pl.id}>
+                        {pl.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {simProduct && productPlatformOptions.length === 0 && (
+                  <p className="text-xs text-orange-600">
+                    Esse produto não tem preço de venda cadastrado em nenhuma plataforma ainda.
+                  </p>
+                )}
+
+                {baseMargin?.status === 'ok' && (
+                  <>
+                    <div className="text-xs text-gray-500 mb-4">
+                      Margem base (sem comissão de creator): R$ {baseMargin.netMargin.toFixed(2)} (
+                      {baseMargin.marginPct.toFixed(1)}%)
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      {simScenarios.map((pct, i) => {
+                        const creatorAmount = (baseMargin.salePrice * (parseFloat(pct) || 0)) / 100
+                        const finalMargin = baseMargin.netMargin - creatorAmount
+                        const finalPct = (finalMargin / baseMargin.salePrice) * 100
+                        return (
+                          <div key={i} className="border border-gray-200 rounded-lg p-4">
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="text-xs text-gray-500">Comissão creator:</span>
+                              <input
+                                type="number"
+                                value={pct}
+                                onChange={(e) => {
+                                  const updated = [...simScenarios]
+                                  updated[i] = e.target.value
+                                  setSimScenarios(updated)
+                                }}
+                                className="w-16 px-2 py-1 border border-gray-300 rounded text-sm"
+                              />
+                              <span className="text-xs text-gray-500">%</span>
+                            </div>
+                            <div className="text-xs text-gray-600 space-y-1">
+                              <div className="flex justify-between">
+                                <span>Valor pro creator</span>
+                                <span>R$ {creatorAmount.toFixed(2)}</span>
+                              </div>
+                              <div
+                                className={`flex justify-between font-semibold border-t pt-1 mt-1 ${
+                                  finalMargin > 0 ? 'text-green-700' : 'text-red-600'
+                                }`}
+                              >
+                                <span>Margem final</span>
+                                <span>
+                                  R$ {finalMargin.toFixed(2)} ({finalPct.toFixed(1)}%)
+                                </span>
+                              </div>
+                            </div>
+                            <div
+                              className={`mt-2 text-[11px] px-2 py-1 rounded text-center ${
+                                finalPct > 10
+                                  ? 'bg-green-100 text-green-700'
+                                  : finalPct > 0
+                                  ? 'bg-yellow-100 text-yellow-700'
+                                  : 'bg-red-100 text-red-700'
+                              }`}
+                            >
+                              {finalPct > 10
+                                ? 'Margem saudável'
+                                : finalPct > 0
+                                ? 'Margem apertada'
+                                : 'Prejuízo'}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+
+                {baseMargin && baseMargin.status !== 'ok' && (
+                  <p className="text-xs text-gray-400">
+                    {baseMargin.status === 'sem_regra'
+                      ? 'Sem regra de taxa cadastrada para essa categoria/plataforma — não dá pra simular ainda.'
+                      : 'Sem preço de venda cadastrado.'}
+                  </p>
+                )}
+              </div>
+            </div>
+          )
+        })()}
       </main>
     </div>
   )
