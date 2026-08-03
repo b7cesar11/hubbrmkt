@@ -803,6 +803,7 @@ export default function Dashboard({ user, onLogout }) {
         {showGaps && (
           <div className="bg-white rounded-xl shadow-md p-4 mb-6">
             <h3 className="text-sm font-semibold text-gray-900 mb-3">Lacunas de Cobertura</h3>
+            <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-gray-500 uppercase">
@@ -849,13 +850,14 @@ export default function Dashboard({ user, onLogout }) {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         )}
 
-        <div className="mb-6 flex gap-1 border-b border-gray-200">
+        <div className="mb-6 flex gap-1 border-b border-gray-200 overflow-x-auto whitespace-nowrap">
             <button
               onClick={() => setActiveTab('visao_geral')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === 'visao_geral'
                   ? 'border-blue-600 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -865,7 +867,7 @@ export default function Dashboard({ user, onLogout }) {
             </button>
             <button
               onClick={() => setActiveTab('produtos')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === 'produtos'
                   ? 'border-blue-600 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -876,7 +878,7 @@ export default function Dashboard({ user, onLogout }) {
             {userRole === 'super_admin' && (
             <button
               onClick={() => setActiveTab('regras')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === 'regras'
                   ? 'border-blue-600 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -888,7 +890,7 @@ export default function Dashboard({ user, onLogout }) {
             {userRole === 'super_admin' && (
             <button
               onClick={() => setActiveTab('promocoes')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === 'promocoes'
                   ? 'border-blue-600 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -899,7 +901,7 @@ export default function Dashboard({ user, onLogout }) {
             )}
             <button
               onClick={() => setActiveTab('simulador')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === 'simulador'
                   ? 'border-blue-600 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -1126,11 +1128,17 @@ export default function Dashboard({ user, onLogout }) {
                   <input
                     type="text"
                     placeholder="Categoria"
+                    list="categorias-existentes"
                     value={newProduct.category}
                     onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
                     required
                     className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
+                  <datalist id="categorias-existentes">
+                    {availableCategories.map((cat) => (
+                      <option key={cat} value={cat} />
+                    ))}
+                  </datalist>
                   <input
                     type="number"
                     placeholder="Custo (R$)"
@@ -1207,6 +1215,53 @@ export default function Dashboard({ user, onLogout }) {
                           ))}
                         </div>
                       )}
+                      {newListings[p.id]?.enabled &&
+                        newListings[p.id]?.sale_price &&
+                        newProduct.cost_price &&
+                        (() => {
+                          const price = parseFloat(newListings[p.id].sale_price)
+                          const cost = parseFloat(newProduct.cost_price)
+                          if (isNaN(price) || isNaN(cost) || price <= 0) return null
+
+                          const rule = findApplicableRule(p.id, newProduct.category, price)
+                          if (!rule) {
+                            return (
+                              <p className="ml-7 mt-2 text-xs text-orange-600">
+                                ⚠️ Sem regra de taxa pra "{newProduct.category || 'essa categoria'}"
+                                nessa plataforma ainda — vai ficar registrado como pendência.
+                              </p>
+                            )
+                          }
+
+                          const commission = (price * rule.commission_pct) / 100
+                          const fixedFee = rule.fixed_fee || 0
+                          const selectedCostsTotal = (newListings[p.id]?.selectedCosts || [])
+                            .map((id) => costComponents.find((c) => c.id === id))
+                            .filter(Boolean)
+                            .reduce(
+                              (sum, c) =>
+                                sum +
+                                (c.calc_type === 'percentage' ? (price * c.default_value) / 100 : c.default_value),
+                              0
+                            )
+                          const previewMargin = price - cost - commission - fixedFee - selectedCostsTotal
+                          const previewPct = (previewMargin / price) * 100
+
+                          return (
+                            <p
+                              className={`ml-7 mt-2 text-xs font-medium ${
+                                previewPct > 10
+                                  ? 'text-green-600'
+                                  : previewPct > 0
+                                  ? 'text-yellow-600'
+                                  : 'text-red-600'
+                              }`}
+                            >
+                              Prévia: margem de R$ {previewMargin.toFixed(2)} ({previewPct.toFixed(1)}%)
+                              {rule.source_url?.toUpperCase().includes('ESTIMATIVA') && ' — taxa ainda é estimativa'}
+                            </p>
+                          )
+                        })()}
                     </div>
                   ))}
                 </div>
@@ -1941,6 +1996,7 @@ export default function Dashboard({ user, onLogout }) {
             )}
 
             <div className="bg-white rounded-xl shadow-md overflow-hidden">
+              <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200 text-sm">
                 <thead className="bg-gray-50">
                   <tr>
@@ -1992,6 +2048,7 @@ export default function Dashboard({ user, onLogout }) {
                     })}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
         )}
