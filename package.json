@@ -16,12 +16,9 @@
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.109.0",
-    "clsx": "^2.1.1",
     "lucide-react": "^1.28.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router-dom": "^7.18.2",
-    "tailwind-merge": "^3.6.0",
     "ws": "^8.21.1"
   },
   "devDependencies": {
