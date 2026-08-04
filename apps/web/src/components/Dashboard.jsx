@@ -1,21 +1,33 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { Plus, Trash2, Pencil, Package, TrendingUp, AlertCircle } from 'lucide-react'
 import PromotionsView from './PromotionsView'
+import { computeMargin, findApplicableRule, getApplicablePromotions, getListing } from '../lib/margin'
+import { useDashboardData } from '../hooks/useDashboardData'
 
 export default function Dashboard({ user, onLogout }) {
-  const [products, setProducts] = useState([])
-  const [platforms, setPlatforms] = useState([])
-  const [feeRules, setFeeRules] = useState([])
-  const [listings, setListings] = useState([]) // product_listings reais
-  const [costComponents, setCostComponents] = useState([])
-  const [listingCostComponents, setListingCostComponents] = useState([])
-  const [promotions, setPromotions] = useState([])
-  const [companyUsers, setCompanyUsers] = useState([])
-  const [coverageGaps, setCoverageGaps] = useState([])
-  const [companyId, setCompanyId] = useState(null)
-  const [userRole, setUserRole] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const {
+    products,
+    setProducts,
+    platforms,
+    feeRules,
+    setFeeRules,
+    listings,
+    setListings,
+    costComponents,
+    setCostComponents,
+    listingCostComponents,
+    setListingCostComponents,
+    promotions,
+    setPromotions,
+    companyUsers,
+    setCompanyUsers,
+    coverageGaps,
+    setCoverageGaps,
+    companyId,
+    userRole,
+    loading,
+  } = useDashboardData(user)
   const [showNewProduct, setShowNewProduct] = useState(false)
   const [editingProductId, setEditingProductId] = useState(null) // null = modo criação
   const [selectedPlatform, setSelectedPlatform] = useState('all')
@@ -69,67 +81,6 @@ export default function Dashboard({ user, onLogout }) {
   // Form de "criar novo tipo de custo" — { [listingId]: { show, name, category, calc_type, default_value } }
   const [newComponentForm, setNewComponentForm] = useState({})
 
-  useEffect(() => {
-    loadData()
-  }, [])
-
-  async function loadData() {
-    try {
-      // Busca o company_id real do usuário logado — sem isso, o cadastro de
-      // produto é bloqueado pela política de RLS (que exige company_id correto).
-      const { data: userRow, error: userError } = await supabase
-        .from('users')
-        .select('company_id, role')
-        .eq('id', user.id)
-        .single()
-
-      if (userError) throw userError
-      setCompanyId(userRow?.company_id || null)
-      setUserRole(userRow?.role || null)
-
-      if (userRow?.company_id) {
-        const { data: usersData, error: usersError } = await supabase
-          .from('users')
-          .select('id, email, role, company_id')
-          .eq('company_id', userRow.company_id)
-        if (!usersError) setCompanyUsers(usersData || [])
-      }
-
-      const [productsRes, platformsRes, rulesRes, listingsRes, costComponentsRes, listingCostComponentsRes, gapsRes, promotionsRes] = await Promise.all([
-        supabase.from('products').select('*'), // busca todos — filtro de status é feito na tela, não na query
-        supabase.from('platforms').select('*'),
-        supabase.from('platform_fee_rules').select('*'),
-        supabase.from('product_listings').select('*'),
-        supabase.from('cost_components').select('*'),
-        supabase.from('listing_cost_components').select('*'),
-        supabase.from('category_coverage_gaps').select('*').eq('status', 'pending_validation'),
-        supabase.from('platform_promotions').select('*'),
-      ])
-
-      if (productsRes.error) throw productsRes.error
-      if (platformsRes.error) throw platformsRes.error
-      if (rulesRes.error) throw rulesRes.error
-      if (listingsRes.error) throw listingsRes.error
-      if (costComponentsRes.error) throw costComponentsRes.error
-      if (listingCostComponentsRes.error) throw listingCostComponentsRes.error
-      if (gapsRes.error) throw gapsRes.error
-      if (promotionsRes.error) throw promotionsRes.error
-
-      setProducts(productsRes.data || [])
-      setPlatforms(platformsRes.data || [])
-      setFeeRules(rulesRes.data || [])
-      setListings(listingsRes.data || [])
-      setCoverageGaps(gapsRes.data || [])
-      setCostComponents(costComponentsRes.data || [])
-      setListingCostComponents(listingCostComponentsRes.data || [])
-      setPromotions(promotionsRes.data || [])
-    } catch (err) {
-      console.error('Erro ao carregar dados:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   async function handleUpdateRule(oldRule) {
     const form = editRuleForm[oldRule.id]
     if (!form) return
@@ -142,15 +93,15 @@ export default function Dashboard({ user, onLogout }) {
     // e qual seria a margem média antes/depois da mudança.
     const affected = []
     products.forEach((product) => {
-      const m = computeMargin(product, oldRule.platform_id)
+      const m = computeMargin(product, oldRule.platform_id, getMarginDeps())
       if (m.status === 'ok' && m.rule.id === oldRule.id) {
-        affected.push({ product, listing: getListing(product.id, oldRule.platform_id) })
+        affected.push({ product, listing: getListing(product.id, oldRule.platform_id, listings) })
       }
     })
 
     if (affected.length > 0) {
       const avgBefore =
-        affected.reduce((sum, a) => sum + computeMargin(a.product, oldRule.platform_id).marginPct, 0) /
+        affected.reduce((sum, a) => sum + computeMargin(a.product, oldRule.platform_id, getMarginDeps()).marginPct, 0) /
         affected.length
 
       const newCommissionPct = parseFloat(form.commission_pct)
@@ -592,39 +543,15 @@ export default function Dashboard({ user, onLogout }) {
 
   // Espelha a lógica real do banco (fn_check_fee_coverage): plataforma + categoria
   // (ou categoria nula como fallback) + faixa de preço + vigência.
-  function findApplicableRule(platformId, category, price, listingType) {
-    const today = new Date()
-    return feeRules.find((rule) => {
-      if (rule.platform_id !== platformId) return false
-      if (rule.category !== null && rule.category !== category) return false
-      // Se a regra exige um tipo de anúncio específico, o listing precisa bater.
-      // Se a regra não distingue (listing_type null), serve pra qualquer um.
-      if (rule.listing_type !== null && rule.listing_type !== listingType) return false
-
-      const validFrom = new Date(rule.valid_from)
-      const validTo = rule.valid_to ? new Date(rule.valid_to) : null
-      if (today < validFrom) return false
-      if (validTo && today > validTo) return false
-
-      if (rule.price_min !== null && price < rule.price_min) return false
-      if (rule.price_max !== null && price >= rule.price_max) return false
-
-      return true
-    })
-  }
-
-  function getApplicablePromotions(platformId, category) {
-    const today = new Date().toISOString().slice(0, 10)
-    return promotions.filter((promo) => {
-      if (promo.platform_id !== platformId) return false
-      if (promo.category !== null && promo.category !== category) return false
-      return today >= promo.starts_at && today <= promo.ends_at
-    })
-  }
-
-  function getListing(productId, platformId) {
-    return listings.find((l) => l.product_id === productId && l.platform_id === platformId)
-  }
+  // Funções de cálculo de margem movidas para lib/margin.js
+  // Helper para facilitar chamadas com deps
+  const getMarginDeps = () => ({
+    listings,
+    feeRules,
+    promotions,
+    listingCostComponents,
+    costComponents,
+  })
 
   async function handleAddCostToListing(listingId) {
     const form = addCostForm[listingId]
@@ -773,80 +700,10 @@ export default function Dashboard({ user, onLogout }) {
   }
 
   // Retorna null quando falta preço de venda OU regra de taxa — nunca inventa valor.
-  function computeMargin(product, platformId) {
-    const listing = getListing(product.id, platformId)
-    if (!listing) return { status: 'sem_preco' }
-
-    const rule = findApplicableRule(platformId, product.category, listing.sale_price, listing.listing_type)
-    if (!rule) return { status: 'sem_regra' }
-
-    let commission = (listing.sale_price * rule.commission_pct) / 100
-    const fixedFee = rule.fixed_fee || 0
-
-    // Promoções ativas da plataforma/categoria — conecta automaticamente com
-    // qualquer produto que bater, existente ou futuro, igual às regras de taxa.
-    const applicablePromotions = getApplicablePromotions(platformId, product.category)
-    const promoBenefits = []
-    applicablePromotions.forEach((promo) => {
-      if (promo.benefit_type === 'commission_exemption') {
-        const reduction = promo.value_pct ? commission * (promo.value_pct / 100) : commission
-        promoBenefits.push({ name: 'Isenção de comissão (promoção)', amount: reduction })
-      } else if (promo.benefit_type === 'shipping_subsidy') {
-        const amount =
-          promo.value_fixed || (promo.value_pct ? (listing.sale_price * promo.value_pct) / 100 : 0)
-        if (amount > 0) promoBenefits.push({ name: 'Subsídio de frete (promoção)', amount })
-      } else if (promo.benefit_type === 'cashback') {
-        const amount =
-          promo.value_fixed || (promo.value_pct ? (listing.sale_price * promo.value_pct) / 100 : 0)
-        if (amount > 0) promoBenefits.push({ name: 'Cashback (promoção)', amount })
-      }
-      // 'other' fica só informativo — não entra em cálculo automático, valor não é padronizado
-    })
-    const promoBenefitsTotal = promoBenefits.reduce((sum, b) => sum + b.amount, 0)
-
-    // Custos adicionais vinculados a este listing específico (afiliado, marketing, ads...)
-    const appliedCosts = listingCostComponents
-      .filter((lcc) => lcc.product_listing_id === listing.id)
-      .map((lcc) => {
-        const component = costComponents.find((c) => c.id === lcc.cost_component_id)
-        if (!component) return null
-        const value = lcc.value_override ?? component.default_value
-        const amount =
-          component.calc_type === 'percentage' ? (listing.sale_price * value) / 100 : value
-        return { name: component.name, amount, calcType: component.calc_type, value }
-      })
-      .filter(Boolean)
-
-    const additionalCostsTotal = appliedCosts.reduce((sum, c) => sum + c.amount, 0)
-
-    const netMargin =
-      listing.sale_price -
-      product.cost_price -
-      commission -
-      fixedFee -
-      additionalCostsTotal +
-      promoBenefitsTotal
-    const marginPct = (netMargin / listing.sale_price) * 100
-
-    return {
-      status: 'ok',
-      salePrice: listing.sale_price,
-      commission,
-      fixedFee,
-      appliedCosts,
-      additionalCostsTotal,
-      promoBenefits,
-      promoBenefitsTotal,
-      netMargin,
-      marginPct,
-      rule,
-    }
-  }
-
   const availableCategories = [...new Set(products.map((p) => p.category).filter(Boolean))]
 
   const displayedProducts = products
-    .filter((p) => (selectedPlatform === 'all' ? true : getListing(p.id, selectedPlatform)))
+    .filter((p) => (selectedPlatform === 'all' ? true : getListing(p.id, selectedPlatform, listings)))
     .filter((p) => {
       if (statusFilter === 'active') return p.active
       if (statusFilter === 'inactive') return !p.active
@@ -1087,7 +944,7 @@ export default function Dashboard({ user, onLogout }) {
           const results = []
           activeProducts.forEach((product) => {
             platforms.forEach((platform) => {
-              const m = computeMargin(product, platform.id)
+              const m = computeMargin(product, platform.id, getMarginDeps())
               results.push({ product, platform, m })
             })
           })
@@ -1414,7 +1271,8 @@ export default function Dashboard({ user, onLogout }) {
                             p.id,
                             newProduct.category,
                             price,
-                            newListings[p.id]?.listing_type || null
+                            newListings[p.id]?.listing_type || null,
+                            feeRules
                           )
                           if (!rule) {
                             return (
@@ -1520,7 +1378,7 @@ export default function Dashboard({ user, onLogout }) {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {displayedProducts.map((product) => {
                     const margin =
-                      selectedPlatform !== 'all' ? computeMargin(product, selectedPlatform) : null
+                      selectedPlatform !== 'all' ? computeMargin(product, selectedPlatform, getMarginDeps()) : null
 
                     return (
                       <React.Fragment key={product.id}>
@@ -1651,7 +1509,7 @@ export default function Dashboard({ user, onLogout }) {
                             <td colSpan={selectedPlatform !== 'all' ? 8 : 5} className="bg-gray-50 px-6 py-5">
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                 {platforms.map((platform) => {
-                                  const listing = getListing(product.id, platform.id)
+                                  const listing = getListing(product.id, platform.id, listings)
                                   if (!listing) {
                                     return (
                                       <div
@@ -1663,7 +1521,7 @@ export default function Dashboard({ user, onLogout }) {
                                     )
                                   }
 
-                                  const m = computeMargin(product, platform.id)
+                                  const m = computeMargin(product, platform.id, getMarginDeps())
                                   const isEstimate =
                                     m.status === 'ok' &&
                                     (m.rule.source_url?.toUpperCase().includes('ESTIMATIVA') ||
@@ -2252,10 +2110,10 @@ export default function Dashboard({ user, onLogout }) {
         {activeTab === 'simulador' && (() => {
           const simProduct = products.find((p) => p.id === simProductId)
           const productPlatformOptions = simProduct
-            ? platforms.filter((pl) => getListing(simProduct.id, pl.id))
+            ? platforms.filter((pl) => getListing(simProduct.id, pl.id, listings))
             : []
           const baseMargin =
-            simProduct && simPlatformId ? computeMargin(simProduct, simPlatformId) : null
+            simProduct && simPlatformId ? computeMargin(simProduct, simPlatformId, getMarginDeps()) : null
 
           return (
             <div>
