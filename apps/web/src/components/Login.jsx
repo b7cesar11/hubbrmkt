@@ -2,9 +2,11 @@ import React, { useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 export default function Login({ onLogin }) {
+  const [mode, setMode] = useState('signin') // signin | signup
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
+  const [info, setInfo] = useState(null)
   const [loading, setLoading] = useState(false)
 
   const handleSignIn = async (e) => {
@@ -28,6 +30,30 @@ export default function Login({ onLogin }) {
     }
   }
 
+  const handleSignUp = async (e) => {
+    e.preventDefault()
+    setError(null)
+    setInfo(null)
+    setLoading(true)
+
+    try {
+      const { data, error } = await supabase.auth.signUp({ email, password })
+      if (error) throw error
+
+      if (data.session) {
+        // Confirmação de e-mail desativada — já loga direto
+        onLogin(data.user)
+      } else {
+        setInfo('Conta criada. Confirme seu e-mail (se a confirmação estiver ativa) e faça login.')
+        setMode('signin')
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
       <div className="max-w-md w-full mx-4">
@@ -37,7 +63,7 @@ export default function Login({ onLogin }) {
             <p className="text-gray-600">Inteligência de Margens Multicanal</p>
           </div>
 
-          <form onSubmit={handleSignIn} className="space-y-6">
+          <form onSubmit={mode === 'signin' ? handleSignIn : handleSignUp} className="space-y-6">
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
                 E-mail
@@ -63,6 +89,7 @@ export default function Login({ onLogin }) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                minLength={6}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 placeholder="••••••••"
               />
@@ -73,18 +100,51 @@ export default function Login({ onLogin }) {
                 {error}
               </div>
             )}
+            {info && (
+              <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg text-sm">
+                {info}
+              </div>
+            )}
 
             <button
               type="submit"
               disabled={loading}
               className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold py-3 rounded-lg transition-colors duration-200"
             >
-              {loading ? 'Entrando...' : 'Entrar'}
+              {loading ? 'Aguarde...' : mode === 'signin' ? 'Entrar' : 'Criar conta'}
             </button>
           </form>
 
           <div className="mt-6 text-center text-sm text-gray-500">
-            <p>Ainda não tem conta? Contate o administrador.</p>
+            {mode === 'signin' ? (
+              <p>
+                Não tem conta?{' '}
+                <button
+                  onClick={() => {
+                    setMode('signup')
+                    setError(null)
+                    setInfo(null)
+                  }}
+                  className="text-blue-600 hover:underline font-medium"
+                >
+                  Criar conta
+                </button>
+              </p>
+            ) : (
+              <p>
+                Já tem conta?{' '}
+                <button
+                  onClick={() => {
+                    setMode('signin')
+                    setError(null)
+                    setInfo(null)
+                  }}
+                  className="text-blue-600 hover:underline font-medium"
+                >
+                  Fazer login
+                </button>
+              </p>
+            )}
           </div>
         </div>
       </div>
