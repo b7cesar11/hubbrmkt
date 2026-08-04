@@ -274,6 +274,7 @@ export default function Dashboard({ user, onLogout }) {
         prefilledListings[p.id] = {
           enabled: true,
           sale_price: String(listing.sale_price),
+          listing_type: listing.listing_type || '',
           selectedCosts,
           _listingId: listing.id, // guarda o id real pra saber se é update ou insert
         }
@@ -339,19 +340,22 @@ export default function Dashboard({ user, onLogout }) {
 
       if (formEntry?.enabled && formEntry.sale_price) {
         if (existingListing) {
-          // Atualiza preço se mudou
+          // Atualiza preço e/ou tipo de anúncio se mudou
           const newPrice = parseFloat(formEntry.sale_price)
-          if (newPrice !== existingListing.sale_price) {
+          const newListingType = formEntry.listing_type || null
+          if (newPrice !== existingListing.sale_price || newListingType !== existingListing.listing_type) {
             const { error: updErr } = await supabase
               .from('product_listings')
-              .update({ sale_price: newPrice })
+              .update({ sale_price: newPrice, listing_type: newListingType })
               .eq('id', existingListing.id)
             if (updErr) {
               alert(`Erro ao atualizar preço em ${platform.name}: ` + updErr.message)
               continue
             }
             updatedListings = updatedListings.map((l) =>
-              l.id === existingListing.id ? { ...l, sale_price: newPrice } : l
+              l.id === existingListing.id
+                ? { ...l, sale_price: newPrice, listing_type: newListingType }
+                : l
             )
           }
         } else {
@@ -363,6 +367,7 @@ export default function Dashboard({ user, onLogout }) {
                 product_id: editingProductId,
                 platform_id: platform.id,
                 sale_price: parseFloat(formEntry.sale_price),
+                listing_type: formEntry.listing_type || null,
               },
             ])
             .select()
@@ -495,6 +500,7 @@ export default function Dashboard({ user, onLogout }) {
         product_id: createdProduct.id,
         platform_id: platformId,
         sale_price: parseFloat(v.sale_price),
+        listing_type: v.listing_type || null,
       }))
 
     let insertedListings = []
@@ -568,11 +574,14 @@ export default function Dashboard({ user, onLogout }) {
 
   // Espelha a lógica real do banco (fn_check_fee_coverage): plataforma + categoria
   // (ou categoria nula como fallback) + faixa de preço + vigência.
-  function findApplicableRule(platformId, category, price) {
+  function findApplicableRule(platformId, category, price, listingType) {
     const today = new Date()
     return feeRules.find((rule) => {
       if (rule.platform_id !== platformId) return false
       if (rule.category !== null && rule.category !== category) return false
+      // Se a regra exige um tipo de anúncio específico, o listing precisa bater.
+      // Se a regra não distingue (listing_type null), serve pra qualquer um.
+      if (rule.listing_type !== null && rule.listing_type !== listingType) return false
 
       const validFrom = new Date(rule.valid_from)
       const validTo = rule.valid_to ? new Date(rule.valid_to) : null
@@ -673,7 +682,7 @@ export default function Dashboard({ user, onLogout }) {
     const listing = getListing(product.id, platformId)
     if (!listing) return { status: 'sem_preco' }
 
-    const rule = findApplicableRule(platformId, product.category, listing.sale_price)
+    const rule = findApplicableRule(platformId, product.category, listing.sale_price, listing.listing_type)
     if (!rule) return { status: 'sem_regra' }
 
     let commission = (listing.sale_price * rule.commission_pct) / 100
@@ -686,7 +695,6 @@ export default function Dashboard({ user, onLogout }) {
     applicablePromotions.forEach((promo) => {
       if (promo.benefit_type === 'commission_exemption') {
         const reduction = promo.value_pct ? commission * (promo.value_pct / 100) : commission
-        commission -= reduction
         promoBenefits.push({ name: 'Isenção de comissão (promoção)', amount: reduction })
       } else if (promo.benefit_type === 'shipping_subsidy') {
         const amount =
@@ -1190,6 +1198,22 @@ export default function Dashboard({ user, onLogout }) {
                           min="0"
                           className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 disabled:text-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         />
+                        {p.name === 'Mercado Livre' && newListings[p.id]?.enabled && (
+                          <select
+                            value={newListings[p.id]?.listing_type || ''}
+                            onChange={(e) =>
+                              setNewListings((prev) => ({
+                                ...prev,
+                                [p.id]: { ...prev[p.id], listing_type: e.target.value },
+                              }))
+                            }
+                            className="px-2 py-1.5 border border-gray-300 rounded-lg text-sm"
+                          >
+                            <option value="">Tipo de anúncio...</option>
+                            <option value="classico">Clássico</option>
+                            <option value="premium">Premium</option>
+                          </select>
+                        )}
                       </div>
                       {newListings[p.id]?.enabled && costComponents.length > 0 && (
                         <div className="ml-7 mt-2 flex flex-wrap gap-2">
@@ -1223,7 +1247,12 @@ export default function Dashboard({ user, onLogout }) {
                           const cost = parseFloat(newProduct.cost_price)
                           if (isNaN(price) || isNaN(cost) || price <= 0) return null
 
-                          const rule = findApplicableRule(p.id, newProduct.category, price)
+                          const rule = findApplicableRule(
+                            p.id,
+                            newProduct.category,
+                            price,
+                            newListings[p.id]?.listing_type || null
+                          )
                           if (!rule) {
                             return (
                               <p className="ml-7 mt-2 text-xs text-orange-600">
