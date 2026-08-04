@@ -22,6 +22,15 @@ export default function Dashboard({ user, onLogout }) {
   const [simProductId, setSimProductId] = useState('')
   const [simPlatformId, setSimPlatformId] = useState('')
   const [simScenarios, setSimScenarios] = useState(['10', '20', '30'])
+  const [showNewCostComponent, setShowNewCostComponent] = useState(false)
+  const [newCostComponent, setNewCostComponent] = useState({
+    name: '',
+    category: 'other',
+    calc_type: 'percentage',
+    default_value: '',
+  })
+  const [editingCostComponentId, setEditingCostComponentId] = useState(null)
+  const [editCostComponentForm, setEditCostComponentForm] = useState({})
   const [activeTab, setActiveTab] = useState('visao_geral') // visao_geral | produtos | regras | promocoes
   // Form de nova regra de taxa (do zero, ou resolvendo uma lacuna)
   const [showNewRuleForm, setShowNewRuleForm] = useState(false)
@@ -82,7 +91,7 @@ export default function Dashboard({ user, onLogout }) {
         supabase.from('platforms').select('*'),
         supabase.from('platform_fee_rules').select('*'),
         supabase.from('product_listings').select('*'),
-        supabase.from('cost_components').select('*').eq('active', true),
+        supabase.from('cost_components').select('*'),
         supabase.from('listing_cost_components').select('*'),
         supabase.from('category_coverage_gaps').select('*').eq('status', 'pending_validation'),
         supabase.from('platform_promotions').select('*'),
@@ -641,6 +650,83 @@ export default function Dashboard({ user, onLogout }) {
     setListingCostComponents(listingCostComponents.filter((lcc) => lcc.id !== id))
   }
 
+  // Criação a partir da tela de catálogo (não vinculada a um listing específico ainda)
+  async function handleCreateCostComponentStandalone(e) {
+    e.preventDefault()
+    if (!newCostComponent.name || !newCostComponent.default_value) {
+      alert('Preencha nome e valor padrão.')
+      return
+    }
+    if (!companyId) return
+
+    const { data, error } = await supabase
+      .from('cost_components')
+      .insert([
+        {
+          company_id: companyId,
+          name: newCostComponent.name,
+          category: newCostComponent.category,
+          calc_type: newCostComponent.calc_type,
+          default_value: parseFloat(newCostComponent.default_value),
+        },
+      ])
+      .select()
+
+    if (error) {
+      alert('Erro ao criar tipo de custo: ' + error.message)
+      return
+    }
+
+    setCostComponents([...costComponents, ...(data || [])])
+    setNewCostComponent({ name: '', category: 'other', calc_type: 'percentage', default_value: '' })
+    setShowNewCostComponent(false)
+  }
+
+  async function handleUpdateCostComponent(id) {
+    const form = editCostComponentForm[id]
+    if (!form) return
+
+    const { error } = await supabase
+      .from('cost_components')
+      .update({
+        name: form.name,
+        category: form.category,
+        calc_type: form.calc_type,
+        default_value: parseFloat(form.default_value),
+      })
+      .eq('id', id)
+
+    if (error) {
+      alert('Erro ao atualizar: ' + error.message)
+      return
+    }
+
+    setCostComponents(
+      costComponents.map((c) =>
+        c.id === id
+          ? { ...c, name: form.name, category: form.category, calc_type: form.calc_type, default_value: parseFloat(form.default_value) }
+          : c
+      )
+    )
+    setEditingCostComponentId(null)
+  }
+
+  async function handleToggleCostComponentActive(component) {
+    const { error } = await supabase
+      .from('cost_components')
+      .update({ active: !component.active })
+      .eq('id', component.id)
+
+    if (error) {
+      alert('Erro ao atualizar status: ' + error.message)
+      return
+    }
+
+    setCostComponents(
+      costComponents.map((c) => (c.id === component.id ? { ...c, active: !c.active } : c))
+    )
+  }
+
   async function handleCreateCostComponent(listingId) {
     const form = newComponentForm[listingId]
     if (!form?.name || !form?.default_value) {
@@ -916,6 +1002,16 @@ export default function Dashboard({ user, onLogout }) {
               }`}
             >
               Simulador
+            </button>
+            <button
+              onClick={() => setActiveTab('custos')}
+              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'custos'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Custos Adicionais
             </button>
           </div>
 
@@ -1215,9 +1311,9 @@ export default function Dashboard({ user, onLogout }) {
                           </select>
                         )}
                       </div>
-                      {newListings[p.id]?.enabled && costComponents.length > 0 && (
+                      {newListings[p.id]?.enabled && costComponents.filter((c) => c.active).length > 0 && (
                         <div className="ml-7 mt-2 flex flex-wrap gap-2">
-                          {costComponents.map((c) => (
+                          {costComponents.filter((c) => c.active).map((c) => (
                             <label
                               key={c.id}
                               className="flex items-center gap-1 text-xs bg-gray-50 rounded px-2 py-1 cursor-pointer"
@@ -1511,7 +1607,7 @@ export default function Dashboard({ user, onLogout }) {
                                       .map((lcc) => lcc.cost_component_id)
                                   )
                                   const availableComponents = costComponents.filter(
-                                    (c) => !appliedIds.has(c.id)
+                                    (c) => !appliedIds.has(c.id) && c.active
                                   )
                                   const listingLccs = listingCostComponents.filter(
                                     (lcc) => lcc.product_listing_id === listing.id
@@ -2218,6 +2314,239 @@ export default function Dashboard({ user, onLogout }) {
             </div>
           )
         })()}
+
+        {activeTab === 'custos' && (
+          <div>
+            <div className="mb-4 flex justify-between items-center">
+              <h2 className="text-xl font-semibold text-gray-900">Custos Adicionais</h2>
+              <button
+                onClick={() => setShowNewCostComponent(!showNewCostComponent)}
+                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Novo Custo
+              </button>
+            </div>
+
+            {showNewCostComponent && (
+              <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+                <form onSubmit={handleCreateCostComponentStandalone} className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                    <input
+                      type="text"
+                      placeholder="Nome (ex: Comissão Creator)"
+                      value={newCostComponent.name}
+                      onChange={(e) => setNewCostComponent({ ...newCostComponent, name: e.target.value })}
+                      required
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                    <select
+                      value={newCostComponent.category}
+                      onChange={(e) => setNewCostComponent({ ...newCostComponent, category: e.target.value })}
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="affiliate_commission">Comissão de afiliado</option>
+                      <option value="marketing_commission">Comissão de marketing</option>
+                      <option value="ads_cost">Custo de ads</option>
+                      <option value="other">Outro</option>
+                    </select>
+                    <select
+                      value={newCostComponent.calc_type}
+                      onChange={(e) => setNewCostComponent({ ...newCostComponent, calc_type: e.target.value })}
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="percentage">% do preço</option>
+                      <option value="fixed">R$ fixo</option>
+                    </select>
+                    <input
+                      type="number"
+                      placeholder="Valor padrão"
+                      value={newCostComponent.default_value}
+                      onChange={(e) => setNewCostComponent({ ...newCostComponent, default_value: e.target.value })}
+                      step="0.01"
+                      required
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm">
+                      Salvar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewCostComponent(false)}
+                      className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            <div className="bg-white rounded-xl shadow-md overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200 text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nome</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Categoria</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipo</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Valor padrão</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {costComponents.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
+                          Nenhum custo adicional cadastrado ainda.
+                        </td>
+                      </tr>
+                    ) : (
+                      costComponents.map((c) => {
+                        const isEditing = editingCostComponentId === c.id
+                        return (
+                          <tr key={c.id} className={!c.active ? 'opacity-50' : ''}>
+                            {isEditing ? (
+                              <>
+                                <td className="px-4 py-2">
+                                  <input
+                                    type="text"
+                                    value={editCostComponentForm[c.id]?.name ?? c.name}
+                                    onChange={(e) =>
+                                      setEditCostComponentForm((prev) => ({
+                                        ...prev,
+                                        [c.id]: { ...prev[c.id], name: e.target.value },
+                                      }))
+                                    }
+                                    className="px-2 py-1 border border-gray-300 rounded text-sm w-full"
+                                  />
+                                </td>
+                                <td className="px-4 py-2">
+                                  <select
+                                    value={editCostComponentForm[c.id]?.category ?? c.category}
+                                    onChange={(e) =>
+                                      setEditCostComponentForm((prev) => ({
+                                        ...prev,
+                                        [c.id]: { ...prev[c.id], category: e.target.value },
+                                      }))
+                                    }
+                                    className="px-2 py-1 border border-gray-300 rounded text-sm"
+                                  >
+                                    <option value="affiliate_commission">Afiliado</option>
+                                    <option value="marketing_commission">Marketing</option>
+                                    <option value="ads_cost">Ads</option>
+                                    <option value="other">Outro</option>
+                                  </select>
+                                </td>
+                                <td className="px-4 py-2">
+                                  <select
+                                    value={editCostComponentForm[c.id]?.calc_type ?? c.calc_type}
+                                    onChange={(e) =>
+                                      setEditCostComponentForm((prev) => ({
+                                        ...prev,
+                                        [c.id]: { ...prev[c.id], calc_type: e.target.value },
+                                      }))
+                                    }
+                                    className="px-2 py-1 border border-gray-300 rounded text-sm"
+                                  >
+                                    <option value="percentage">%</option>
+                                    <option value="fixed">R$ fixo</option>
+                                  </select>
+                                </td>
+                                <td className="px-4 py-2">
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    value={editCostComponentForm[c.id]?.default_value ?? c.default_value}
+                                    onChange={(e) =>
+                                      setEditCostComponentForm((prev) => ({
+                                        ...prev,
+                                        [c.id]: { ...prev[c.id], default_value: e.target.value },
+                                      }))
+                                    }
+                                    className="px-2 py-1 border border-gray-300 rounded text-sm w-24"
+                                  />
+                                </td>
+                                <td className="px-4 py-2 text-xs text-gray-400">
+                                  {c.active ? 'Ativo' : 'Inativo'}
+                                </td>
+                                <td className="px-4 py-2 space-x-2">
+                                  <button
+                                    onClick={() => handleUpdateCostComponent(c.id)}
+                                    className="text-xs text-green-600 hover:underline"
+                                  >
+                                    salvar
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingCostComponentId(null)}
+                                    className="text-xs text-gray-500 hover:underline"
+                                  >
+                                    cancelar
+                                  </button>
+                                </td>
+                              </>
+                            ) : (
+                              <>
+                                <td className="px-4 py-3">{c.name}</td>
+                                <td className="px-4 py-3 text-gray-500">
+                                  {{
+                                    affiliate_commission: 'Comissão de afiliado',
+                                    marketing_commission: 'Comissão de marketing',
+                                    ads_cost: 'Custo de ads',
+                                    other: 'Outro',
+                                  }[c.category] || c.category}
+                                </td>
+                                <td className="px-4 py-3">{c.calc_type === 'percentage' ? '%' : 'R$ fixo'}</td>
+                                <td className="px-4 py-3">
+                                  {c.calc_type === 'percentage' ? `${c.default_value}%` : `R$ ${c.default_value}`}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <span
+                                    className={`text-xs px-2 py-0.5 rounded-full ${
+                                      c.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                                    }`}
+                                  >
+                                    {c.active ? 'Ativo' : 'Inativo'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 space-x-3">
+                                  <button
+                                    onClick={() => {
+                                      setEditingCostComponentId(c.id)
+                                      setEditCostComponentForm((prev) => ({ ...prev, [c.id]: { ...c } }))
+                                    }}
+                                    className="text-xs text-blue-600 hover:underline"
+                                  >
+                                    editar
+                                  </button>
+                                  <button
+                                    onClick={() => handleToggleCostComponentActive(c)}
+                                    className={`text-xs hover:underline ${
+                                      c.active ? 'text-red-600' : 'text-green-600'
+                                    }`}
+                                  >
+                                    {c.active ? 'desativar' : 'reativar'}
+                                  </button>
+                                </td>
+                              </>
+                            )}
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <p className="text-xs text-gray-400 mt-3">
+              Desativar não apaga custos já aplicados em produtos — só some da lista de opções pra
+              aplicar em produtos novos.
+            </p>
+          </div>
+        )}
       </main>
     </div>
   )
