@@ -1,0 +1,28 @@
+-- =============================================================================
+-- OBSOLETO — NÃO USAR
+-- =============================================================================
+-- Esta proposta original criava tabelas NOVAS chamadas `marketplace_connections`
+-- e `marketplace_fee_cache`. Ao conectar ao banco real via MCP do Supabase,
+-- descobriu-se que a integração já tinha tabelas equivalentes com OUTROS nomes,
+-- criadas em iteração anterior:
+--
+--     platform_connections   (em vez de marketplace_connections)
+--     live_fee_cache          (em vez de marketplace_fee_cache)
+--
+-- Portanto esta proposta foi DESCARTADA para não duplicar schema. A integração
+-- foi alinhada ao schema real, e a única mudança necessária foi aplicada ao vivo
+-- via MCP na migração:
+--
+--     secure_platform_connection_tokens_and_cache
+--
+-- que faz:
+--   * REVOKE ALL ON platform_connections FROM anon, authenticated;
+--   * GRANT SELECT apenas nas colunas NÃO-sensíveis (sem access_token/refresh_token)
+--     para authenticated;
+--   * cria a RPC get_platform_connections() (SECURITY DEFINER) que devolve só o
+--     status da conexão, filtrado por fn_current_company_id();
+--   * cria o índice único live_fee_cache_lookup_uidx para o upsert do cache.
+--
+-- Consulte docs/INTEGRACAO_API_MARKETPLACES.md (seção 2) para o detalhe do que
+-- foi aplicado. Este arquivo é mantido apenas como registro histórico.
+-- =============================================================================
