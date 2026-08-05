@@ -1,23 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Link2, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react'
 import {
-  buildMercadoLivreAuthUrl,
+  startMercadoLivreConnect,
   getMarketplaceConnections,
   queryMercadoLivreFee,
 } from '../../lib/marketplaceConnections'
 
-const PLATFORM_LABELS = {
-  mercado_livre: 'Mercado Livre',
-  amazon: 'Amazon',
-  shopee: 'Shopee',
-  magalu: 'Magalu',
-  tiktok_shop: 'TikTok Shop',
-}
+// Nome da plataforma Mercado Livre como aparece em `platforms.name`
+// (usado para localizar a conexão retornada pela RPC get_platform_connections).
+const ML_PLATFORM_NAME = 'Mercado Livre'
 
 function StatusBadge({ status }) {
   const map = {
     connected: { cls: 'bg-green-100 text-green-700', label: 'Conectado' },
     disconnected: { cls: 'bg-gray-100 text-gray-600', label: 'Desconectado' },
+    expired: { cls: 'bg-amber-100 text-amber-700', label: 'Expirado — reconectar' },
     error: { cls: 'bg-red-100 text-red-700', label: 'Erro — reconectar' },
   }
   const s = map[status] || map.disconnected
@@ -48,7 +45,7 @@ export function ConexoesTab({ companyId, userRole }) {
     setLoading(true)
     setError(null)
     try {
-      const data = await getMarketplaceConnections(companyId)
+      const data = await getMarketplaceConnections()
       setConnections(data)
     } catch (e) {
       setError(e.message || 'Falha ao carregar conexões.')
@@ -61,14 +58,15 @@ export function ConexoesTab({ companyId, userRole }) {
     loadConnections()
   }, [loadConnections])
 
-  const mlConnection = connections.find((c) => c.platform === 'mercado_livre')
+  const mlConnection = connections.find((c) => c.platform_name === ML_PLATFORM_NAME)
 
-  function handleConnectMercadoLivre() {
+  async function handleConnectMercadoLivre() {
+    setError(null)
     try {
-      const url = buildMercadoLivreAuthUrl(companyId)
+      const url = await startMercadoLivreConnect()
       window.location.href = url
     } catch (e) {
-      setError(e.message)
+      setError(e.message || 'Falha ao iniciar a conexão com o Mercado Livre.')
     }
   }
 
@@ -79,7 +77,6 @@ export function ConexoesTab({ companyId, userRole }) {
     setTestResult(null)
     try {
       const res = await queryMercadoLivreFee({
-        companyId,
         categoryId: testForm.categoryId,
         price: Number(testForm.price),
         listingType: testForm.listingType,
@@ -133,7 +130,7 @@ export function ConexoesTab({ companyId, userRole }) {
             </div>
             <div>
               <h3 className="font-semibold text-gray-900">
-                {PLATFORM_LABELS.mercado_livre}
+                {ML_PLATFORM_NAME}
               </h3>
               <div className="mt-1">
                 <StatusBadge status={mlConnection?.status || 'disconnected'} />
@@ -155,7 +152,7 @@ export function ConexoesTab({ companyId, userRole }) {
           <dl className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
             <div>
               <dt className="text-gray-500">Vendedor (ID)</dt>
-              <dd className="text-gray-900">{mlConnection.external_user_id || '—'}</dd>
+              <dd className="text-gray-900">{mlConnection.external_seller_id || '—'}</dd>
             </div>
             <div>
               <dt className="text-gray-500">Conectado em</dt>

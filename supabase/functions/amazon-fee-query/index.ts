@@ -35,10 +35,10 @@
 //
 // -----------------------------------------------------------------------------
 // Estrutura pretendida (igual à do ML, reaproveitando o mesmo schema):
-//   1. Receber { company_id, asin|sku, price }.
-//   2. Checar marketplace_fee_cache (platform = 'amazon').
+//   1. Receber { asin|sku, price } (company_id derivado do JWT).
+//   2. Checar live_fee_cache (platform_id = Amazon).
 //   3. Garantir access_token LWA válido a partir do refresh_token guardado em
-//      marketplace_connections (platform = 'amazon'), renovando quando expirar.
+//      platform_connections (platform_id = Amazon), renovando quando expirar.
 //   4. POST feesEstimate, parsear FeeDetailList -> commission_pct + fixed_fee.
 //   5. Gravar no cache e retornar no MESMO formato do ML:
 //      { ok, source, commission_pct, fixed_fee, raw }.
