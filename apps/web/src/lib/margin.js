@@ -108,7 +108,10 @@ function evaluateRuleChargeCondition(charge, listing) {
     const value = listing.program_config?.[condition.program_key] ?? 'unknown'
     if (value === condition.equals) return { applies: true, warning: null }
     if (value === 'unknown' || value == null) {
-      return { applies: false, warning: charge.unknown_message || null }
+      return {
+        applies: charge.unknown_policy === 'apply',
+        warning: charge.unknown_message || null,
+      }
     }
     return { applies: false, warning: null }
   }
