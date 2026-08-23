@@ -31,11 +31,6 @@ function ruleSpecificity(rule, category, listingType) {
   return score
 }
 
-/**
- * Resolve a regra aplicável de forma determinística.
- * Prioridade: categoria específica > fallback; listing_type específico > fallback;
- * em empate, regra mais recente (valid_from/created_at) vence.
- */
 export function findApplicableRule(
   platformId,
   category,
@@ -121,11 +116,7 @@ function evaluateRuleChargeCondition(charge, listing) {
   return { applies: false, warning: null }
 }
 
-/**
- * Interpreta fórmulas declaradas em platform_fee_rules.calculation_config.
- * O motor é deliberadamente pequeno e declarativo: nenhuma plataforma é
- * reconhecida por nome aqui.
- */
+/** Interpreta fórmulas declaradas em platform_fee_rules.calculation_config. */
 export function calculateRuleCharges(rule, listing) {
   const config = rule?.calculation_config || {}
   const salePrice = Number(listing.sale_price || 0)
@@ -170,6 +161,7 @@ export function calculateRuleCharges(rule, listing) {
       calculationBasis: charge.basis || 'sale_price',
       capAmount: charge.cap_amount ?? null,
       minAmount: charge.min_amount ?? null,
+      kind: 'platform',
     })
   }
 
@@ -182,12 +174,6 @@ export function calculateRuleCharges(rule, listing) {
   }
 }
 
-/**
- * Calcula margem projetada.
- * Uma liveFee passada explicitamente (ex.: prévia do cadastro) tem precedência.
- * Na operação normal, o hook de dados pode anexar `listing.live_fee_override`
- * quando encontrar um cache vigente e exato para aquele anúncio.
- */
 export function computeMargin(product, platformId, deps) {
   const {
     listings,
@@ -261,12 +247,12 @@ export function computeMargin(product, platformId, deps) {
       }
     }
   })
-  const promoBenefitsTotal = promoBenefits.reduce((sum, b) => sum + b.amount, 0)
+  const promoBenefitsTotal = promoBenefits.reduce((sum, benefit) => sum + benefit.amount, 0)
 
-  const appliedCosts = listingCostComponents
+  const operationalCosts = listingCostComponents
     .filter((lcc) => lcc.product_listing_id === listing.id)
     .map((lcc) => {
-      const component = costComponents.find((c) => c.id === lcc.cost_component_id)
+      const component = costComponents.find((candidate) => candidate.id === lcc.cost_component_id)
       if (!component) return null
       const value = lcc.value_override ?? component.default_value
       const amount = calculateCostComponent(component, value, listing)
@@ -278,18 +264,20 @@ export function computeMargin(product, platformId, deps) {
         calculationBasis: component.calculation_basis || 'sale_price',
         capAmount: component.cap_amount ?? null,
         minAmount: component.min_amount ?? null,
+        kind: 'operational',
       }
     })
     .filter(Boolean)
 
-  const additionalCostsTotal = appliedCosts.reduce((sum, c) => sum + c.amount, 0)
+  const operationalCostsTotal = operationalCosts.reduce((sum, cost) => sum + cost.amount, 0)
+  const appliedCosts = [...ruleCharges.charges, ...operationalCosts]
+  const additionalCostsTotal = ruleCharges.chargesTotal + operationalCostsTotal
   const costPrice = Number(product.cost_price || 0)
   const netMargin =
     salePrice -
     costPrice -
     commission -
     fixedFee -
-    ruleCharges.chargesTotal -
     additionalCostsTotal +
     promoBenefitsTotal
   const marginPct = salePrice > 0 ? (netMargin / salePrice) * 100 : 0
@@ -307,6 +295,8 @@ export function computeMargin(product, platformId, deps) {
     fixedFeeLabel: ruleCharges.fixedFeeLabel,
     platformCharges: ruleCharges.charges,
     platformChargesTotal: ruleCharges.chargesTotal,
+    operationalCosts,
+    operationalCostsTotal,
     calculationWarnings: [rule.warning, ...ruleCharges.warnings].filter(Boolean),
     appliedCosts,
     additionalCostsTotal,
