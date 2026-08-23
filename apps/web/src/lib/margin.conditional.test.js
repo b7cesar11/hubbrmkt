@@ -26,6 +26,7 @@ function tiktokRule() {
             program_key: 'tiktok_shipping_fee_program',
             equals: 'enrolled',
           },
+          unknown_policy: 'apply',
           unknown_message: 'Confirme participação no programa.',
         },
       ],
@@ -67,12 +68,12 @@ describe('calculateRuleCharges', () => {
     expect(result.chargesTotal).toBe(50)
   })
 
-  it('TikTok não cobra programa quando status é unknown e gera aviso', () => {
+  it('TikTok provisiona o programa quando status é unknown e gera aviso', () => {
     const result = calculateRuleCharges(tiktokRule(), {
       sale_price: 100,
       program_config: { tiktok_shipping_fee_program: 'unknown' },
     })
-    expect(result.chargesTotal).toBe(0)
+    expect(result.chargesTotal).toBe(6)
     expect(result.warnings).toContain('Confirme participação no programa.')
   })
 
