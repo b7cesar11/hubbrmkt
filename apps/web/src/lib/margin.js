@@ -1,111 +1,182 @@
 /**
- * margin.js — Módulo puro de cálculo de margens.
- * Sem dependências de React ou Supabase; totalmente testável com Vitest.
+ * margin.js — motor puro de cálculo de margem projetada.
+ * Sem dependências de React/Supabase; testável com Vitest.
  */
 
-/**
- * Retorna o listing de um produto em uma plataforma específica.
- * @param {string} productId
- * @param {string} platformId
- * @param {Array} listings
- * @returns {object|undefined}
- */
 export function getListing(productId, platformId, listings) {
   return listings.find((l) => l.product_id === productId && l.platform_id === platformId)
 }
 
-/**
- * Encontra a regra de taxa aplicável a um listing.
- * Lógica preservada identicamente ao Dashboard original.
- *
- * @param {string} platformId
- * @param {string} category
- * @param {number} price
- * @param {string|null} listingType
- * @param {Array} feeRules
- * @returns {object|undefined}
- */
-export function findApplicableRule(platformId, category, price, listingType, feeRules) {
-  const today = new Date()
-  return feeRules.find((rule) => {
-    if (rule.platform_id !== platformId) return false
-    if (rule.category !== null && rule.category !== category) return false
-    if (rule.listing_type !== null && rule.listing_type !== listingType) return false
+/** Retorna YYYY-MM-DD usando o calendário local do navegador, sem conversão UTC. */
+export function localDateKey(date = new Date()) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
 
-    const validFrom = new Date(rule.valid_from)
-    const validTo = rule.valid_to ? new Date(rule.valid_to) : null
-    if (today < validFrom) return false
-    if (validTo && today > validTo) return false
+function normalizeText(value) {
+  return value == null ? null : String(value).trim().toLocaleLowerCase('pt-BR')
+}
 
-    if (rule.price_min !== null && price < rule.price_min) return false
-    if (rule.price_max !== null && price >= rule.price_max) return false
-
-    return true
-  })
+function ruleSpecificity(rule, category, listingType) {
+  let score = 0
+  if (rule.category !== null) score += normalizeText(rule.category) === normalizeText(category) ? 4 : -100
+  if (rule.listing_type !== null) score += normalizeText(rule.listing_type) === normalizeText(listingType) ? 2 : -100
+  if (rule.reputation_level && rule.reputation_level !== 'padrao') score += 1
+  return score
 }
 
 /**
- * Retorna promoções ativas para uma plataforma/categoria na data atual.
- *
- * @param {string} platformId
- * @param {string} category
- * @param {Array} promotions
- * @returns {Array}
+ * Resolve a regra aplicável de forma determinística.
+ * Prioridade: categoria específica > fallback; listing_type específico > fallback;
+ * em empate, regra mais recente (valid_from/created_at) vence.
  */
-export function getApplicablePromotions(platformId, category, promotions) {
-  const today = new Date().toISOString().slice(0, 10)
+export function findApplicableRule(
+  platformId,
+  category,
+  price,
+  listingType,
+  feeRules,
+  asOf = new Date(),
+) {
+  const today = typeof asOf === 'string' ? asOf : localDateKey(asOf)
+
+  return feeRules
+    .filter((rule) => {
+      if (rule.platform_id !== platformId) return false
+      if (rule.category !== null && normalizeText(rule.category) !== normalizeText(category)) return false
+      if (rule.listing_type !== null && normalizeText(rule.listing_type) !== normalizeText(listingType)) return false
+      if (rule.valid_from && today < rule.valid_from) return false
+      if (rule.valid_to && today > rule.valid_to) return false
+
+      const min = rule.price_min == null ? null : Number(rule.price_min)
+      const max = rule.price_max == null ? null : Number(rule.price_max)
+      if (min !== null && price < min) return false
+      if (max !== null && price >= max) return false
+      return true
+    })
+    .sort((a, b) => {
+      const specificity = ruleSpecificity(b, category, listingType) - ruleSpecificity(a, category, listingType)
+      if (specificity !== 0) return specificity
+      const validFrom = String(b.valid_from || '').localeCompare(String(a.valid_from || ''))
+      if (validFrom !== 0) return validFrom
+      return String(b.created_at || '').localeCompare(String(a.created_at || ''))
+    })[0]
+}
+
+export function getApplicablePromotions(platformId, category, promotions, asOf = new Date()) {
+  const today = typeof asOf === 'string' ? asOf : localDateKey(asOf)
   return promotions.filter((promo) => {
     if (promo.platform_id !== platformId) return false
-    if (promo.category !== null && promo.category !== category) return false
+    if (promo.category !== null && normalizeText(promo.category) !== normalizeText(category)) return false
     return today >= promo.starts_at && today <= promo.ends_at
   })
 }
 
+export function getCalculationBasisAmount(component, listing) {
+  const basis = component.calculation_basis || 'sale_price'
+  const candidates = {
+    sale_price: listing.sale_price,
+    seller_discount_price: listing.seller_discount_price,
+    actual_paid: listing.actual_paid_amount,
+    affiliate_base: listing.affiliate_commission_base,
+    order_total: listing.order_total,
+    shipping_amount: listing.shipping_amount,
+  }
+  const selected = Number(candidates[basis])
+  return Number.isFinite(selected) ? selected : Number(listing.sale_price) || 0
+}
+
+export function calculateCostComponent(component, value, listing) {
+  let amount
+  if (component.calc_type === 'percentage') {
+    amount = (getCalculationBasisAmount(component, listing) * Number(value || 0)) / 100
+  } else {
+    amount = Number(value || 0)
+  }
+
+  if (component.min_amount != null) amount = Math.max(amount, Number(component.min_amount))
+  if (component.cap_amount != null) amount = Math.min(amount, Number(component.cap_amount))
+  return amount
+}
+
 /**
- * Calcula a margem líquida de um produto em uma plataforma.
- * Lógica preservada identicamente ao Dashboard original.
- *
- * @param {object} product         - { id, cost_price, category, ... }
- * @param {string} platformId
- * @param {object} deps            - { listings, feeRules, promotions, listingCostComponents, costComponents }
- * @returns {object}               - { status, salePrice, commission, fixedFee, appliedCosts,
- *                                     additionalCostsTotal, promoBenefits, promoBenefitsTotal,
- *                                     netMargin, marginPct, rule }
+ * Calcula margem projetada. liveFee, quando fornecida, tem precedência sobre regra estática.
+ * liveFee = { commission_pct, fixed_fee, source, fetched_at, raw }
  */
 export function computeMargin(product, platformId, deps) {
-  const { listings, feeRules, promotions, listingCostComponents, costComponents } = deps
+  const {
+    listings,
+    feeRules,
+    promotions,
+    listingCostComponents,
+    costComponents,
+    liveFee = null,
+    asOf = new Date(),
+  } = deps
 
   const listing = getListing(product.id, platformId, listings)
   if (!listing) return { status: 'sem_preco' }
 
-  const rule = findApplicableRule(
+  const staticRule = findApplicableRule(
     platformId,
-    product.category,
-    listing.sale_price,
+    listing.platform_category_name || product.category,
+    Number(listing.sale_price),
     listing.listing_type,
-    feeRules
+    feeRules,
+    asOf,
   )
+
+  const hasLiveFee = liveFee && Number.isFinite(Number(liveFee.commission_pct))
+  const rule = hasLiveFee
+    ? {
+        ...staticRule,
+        commission_pct: Number(liveFee.commission_pct),
+        fixed_fee: Number(liveFee.fixed_fee || 0),
+        source_kind: 'api',
+        confidence_status: 'account_specific',
+        live_fee_source: liveFee.source,
+        fetched_at: liveFee.fetched_at,
+      }
+    : staticRule
+
   if (!rule) return { status: 'sem_regra' }
 
-  let commission = (listing.sale_price * rule.commission_pct) / 100
-  const fixedFee = rule.fixed_fee || 0
+  const salePrice = Number(listing.sale_price)
+  const commission = (salePrice * Number(rule.commission_pct || 0)) / 100
+  const fixedFee = Number(rule.fixed_fee || 0)
 
-  const applicablePromotions = getApplicablePromotions(platformId, product.category, promotions)
+  const applicablePromotions = getApplicablePromotions(
+    platformId,
+    listing.platform_category_name || product.category,
+    promotions,
+    asOf,
+  )
   const promoBenefits = []
+  let commissionExemptionRemaining = commission
+
   applicablePromotions.forEach((promo) => {
     if (promo.benefit_type === 'commission_exemption') {
-      const reduction = promo.value_pct ? commission * (promo.value_pct / 100) : commission
-      promoBenefits.push({ name: 'Isenção de comissão (promoção)', amount: reduction })
-    } else if (promo.benefit_type === 'shipping_subsidy') {
-      const amount =
-        promo.value_fixed || (promo.value_pct ? (listing.sale_price * promo.value_pct) / 100 : 0)
-      if (amount > 0) promoBenefits.push({ name: 'Subsídio de frete (promoção)', amount })
-    } else if (promo.benefit_type === 'cashback') {
-      const amount =
-        promo.value_fixed || (promo.value_pct ? (listing.sale_price * promo.value_pct) / 100 : 0)
-      if (amount > 0) promoBenefits.push({ name: 'Cashback (promoção)', amount })
+      const requested = promo.value_pct != null
+        ? commission * (Number(promo.value_pct) / 100)
+        : commission
+      const reduction = Math.max(0, Math.min(requested, commissionExemptionRemaining))
+      commissionExemptionRemaining -= reduction
+      if (reduction > 0) promoBenefits.push({ name: 'Isenção de comissão (promoção)', amount: reduction })
+    } else if (promo.benefit_type === 'shipping_subsidy' || promo.benefit_type === 'cashback') {
+      const amount = promo.value_fixed != null
+        ? Number(promo.value_fixed)
+        : promo.value_pct != null
+          ? (salePrice * Number(promo.value_pct)) / 100
+          : 0
+      if (amount > 0) {
+        promoBenefits.push({
+          name: promo.benefit_type === 'shipping_subsidy' ? 'Subsídio de frete (promoção)' : 'Cashback (promoção)',
+          amount,
+        })
+      }
     }
-    // 'other' fica só informativo — não entra em cálculo automático
   })
   const promoBenefitsTotal = promoBenefits.reduce((sum, b) => sum + b.amount, 0)
 
@@ -115,26 +186,28 @@ export function computeMargin(product, platformId, deps) {
       const component = costComponents.find((c) => c.id === lcc.cost_component_id)
       if (!component) return null
       const value = lcc.value_override ?? component.default_value
-      const amount =
-        component.calc_type === 'percentage' ? (listing.sale_price * value) / 100 : value
-      return { name: component.name, amount, calcType: component.calc_type, value }
+      const amount = calculateCostComponent(component, value, listing)
+      return {
+        name: component.name,
+        amount,
+        calcType: component.calc_type,
+        value,
+        calculationBasis: component.calculation_basis || 'sale_price',
+        capAmount: component.cap_amount ?? null,
+        minAmount: component.min_amount ?? null,
+      }
     })
     .filter(Boolean)
 
   const additionalCostsTotal = appliedCosts.reduce((sum, c) => sum + c.amount, 0)
-
-  const netMargin =
-    listing.sale_price -
-    product.cost_price -
-    commission -
-    fixedFee -
-    additionalCostsTotal +
-    promoBenefitsTotal
-  const marginPct = (netMargin / listing.sale_price) * 100
+  const costPrice = Number(product.cost_price || 0)
+  const netMargin = salePrice - costPrice - commission - fixedFee - additionalCostsTotal + promoBenefitsTotal
+  const marginPct = salePrice > 0 ? (netMargin / salePrice) * 100 : 0
 
   return {
     status: 'ok',
-    salePrice: listing.sale_price,
+    calculationMode: hasLiveFee ? 'api_live_or_cache' : 'static_rule',
+    salePrice,
     commission,
     fixedFee,
     appliedCosts,
