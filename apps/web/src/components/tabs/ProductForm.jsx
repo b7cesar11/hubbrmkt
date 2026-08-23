@@ -7,6 +7,7 @@ import {
 } from '../../lib/marketplaceConnections'
 
 const ML_PLATFORM_NAME = 'Mercado Livre'
+const TIKTOK_PLATFORM_NAME = 'TikTok Shop'
 
 function numberOrBlank(value) {
   return value == null ? '' : String(value)
@@ -32,7 +33,6 @@ export function ProductForm({
   setNewProduct,
   newListings,
   setNewListings,
-  toggleListingPlatform,
   setListingPrice,
   toggleListingCost,
   closeProductForm,
@@ -47,7 +47,7 @@ export function ProductForm({
   const [saveError, setSaveError] = useState(null)
 
   const mlPlatform = useMemo(
-    () => platforms.find((p) => p.name === ML_PLATFORM_NAME),
+    () => platforms.find((platform) => platform.name === ML_PLATFORM_NAME),
     [platforms]
   )
   const mlConnected = connections.some(
@@ -79,8 +79,6 @@ export function ProductForm({
     }
   }, [])
 
-  // O Dashboard legado ainda pré-preenche só preço/tipo. Buscamos os campos v2
-  // diretamente para que editar um produto não apague categoria/logística já salva.
   useEffect(() => {
     if (!editingProductId) return undefined
     let cancelled = false
@@ -89,13 +87,13 @@ export function ProductForm({
       const { data, error } = await supabase
         .from('product_listings')
         .select(
-          'id, platform_id, platform_category_id, logistic_type, shipping_mode, billable_weight_kg, length_cm, width_cm, height_cm'
+          'id, platform_id, platform_category_id, logistic_type, shipping_mode, billable_weight_kg, length_cm, width_cm, height_cm, program_config'
         )
         .eq('product_id', editingProductId)
 
       if (cancelled || error) return
-      setNewListings((prev) => {
-        const next = { ...prev }
+      setNewListings((previous) => {
+        const next = { ...previous }
         for (const listing of data || []) {
           next[listing.platform_id] = {
             ...next[listing.platform_id],
@@ -106,6 +104,7 @@ export function ProductForm({
             length_cm: numberOrBlank(listing.length_cm),
             width_cm: numberOrBlank(listing.width_cm),
             height_cm: numberOrBlank(listing.height_cm),
+            program_config: listing.program_config || {},
           }
         }
         return next
@@ -119,10 +118,7 @@ export function ProductForm({
   }, [editingProductId, setNewListings])
 
   const mlEntry = mlPlatform ? newListings[mlPlatform.id] : null
-  const mlCurrentKey = liveQueryKey(mlEntry, newProduct.weight_kg)
 
-  // Quando a conta ML estiver conectada, a taxa é consultada automaticamente
-  // depois que os campos mínimos estão preenchidos. O backend usa cache de 24h.
   useEffect(() => {
     if (!mlPlatform || !mlConnected || !mlEntry?.enabled) return undefined
     const price = Number(mlEntry.sale_price)
@@ -132,8 +128,8 @@ export function ProductForm({
 
     const key = liveQueryKey(mlEntry, newProduct.weight_kg)
     const timer = window.setTimeout(async () => {
-      setLiveLoading((prev) => ({ ...prev, [mlPlatform.id]: true }))
-      setLiveErrors((prev) => ({ ...prev, [mlPlatform.id]: null }))
+      setLiveLoading((previous) => ({ ...previous, [mlPlatform.id]: true }))
+      setLiveErrors((previous) => ({ ...previous, [mlPlatform.id]: null }))
       try {
         const result = await queryMercadoLivreFee({
           categoryId: mlEntry.platform_category_id,
@@ -144,15 +140,15 @@ export function ProductForm({
           billableWeightKg: mlEntry.billable_weight_kg || newProduct.weight_kg || null,
         })
         if (!result?.ok) throw new Error(result?.error || 'Falha na consulta de taxa do ML.')
-        setLiveFees((prev) => ({ ...prev, [mlPlatform.id]: { key, result } }))
+        setLiveFees((previous) => ({ ...previous, [mlPlatform.id]: { key, result } }))
         window.dispatchEvent(new CustomEvent('margemhub:data-changed'))
       } catch (error) {
-        setLiveErrors((prev) => ({
-          ...prev,
+        setLiveErrors((previous) => ({
+          ...previous,
           [mlPlatform.id]: error.message || 'Falha na consulta de taxa ao vivo.',
         }))
       } finally {
-        setLiveLoading((prev) => ({ ...prev, [mlPlatform.id]: false }))
+        setLiveLoading((previous) => ({ ...previous, [mlPlatform.id]: false }))
       }
     }, 650)
 
@@ -171,9 +167,22 @@ export function ProductForm({
   ])
 
   function setListingField(platformId, field, value) {
-    setNewListings((prev) => ({
-      ...prev,
-      [platformId]: { ...prev[platformId], [field]: value },
+    setNewListings((previous) => ({
+      ...previous,
+      [platformId]: { ...previous[platformId], [field]: value },
+    }))
+  }
+
+  function setProgramField(platformId, key, value) {
+    setNewListings((previous) => ({
+      ...previous,
+      [platformId]: {
+        ...previous[platformId],
+        program_config: {
+          ...(previous[platformId]?.program_config || {}),
+          [key]: value,
+        },
+      },
     }))
   }
 
@@ -202,6 +211,7 @@ export function ProductForm({
       length_cm: Number(entry.length_cm) || null,
       width_cm: Number(entry.width_cm) || null,
       height_cm: Number(entry.height_cm) || null,
+      program_config: entry.program_config || {},
     }
     const selectedCosts = (entry.selectedCosts || []).map((costId) => ({
       product_listing_id: previewListingId,
@@ -232,6 +242,14 @@ export function ProductForm({
 
     const listingsPayload = platforms.map((platform) => {
       const entry = newListings[platform.id] || {}
+      const programConfig = { ...(entry.program_config || {}) }
+      if (
+        platform.name === TIKTOK_PLATFORM_NAME &&
+        !programConfig.tiktok_shipping_fee_program
+      ) {
+        programConfig.tiktok_shipping_fee_program = 'unknown'
+      }
+
       return {
         platform_id: platform.id,
         enabled: Boolean(entry.enabled),
@@ -244,6 +262,7 @@ export function ProductForm({
         length_cm: entry.length_cm || '',
         width_cm: entry.width_cm || '',
         height_cm: entry.height_cm || '',
+        program_config: programConfig,
         selectedCosts: entry.selectedCosts || [],
       }
     })
@@ -285,7 +304,7 @@ export function ProductForm({
               type="text"
               placeholder="SKU"
               value={newProduct.sku}
-              onChange={(e) => setNewProduct({ ...newProduct, sku: e.target.value })}
+              onChange={(event) => setNewProduct({ ...newProduct, sku: event.target.value })}
               required
               className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
@@ -293,7 +312,7 @@ export function ProductForm({
               type="text"
               placeholder="Nome"
               value={newProduct.name}
-              onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+              onChange={(event) => setNewProduct({ ...newProduct, name: event.target.value })}
               required
               className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
@@ -302,20 +321,20 @@ export function ProductForm({
               placeholder="Categoria interna"
               list="categorias-existentes"
               value={newProduct.category}
-              onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
+              onChange={(event) => setNewProduct({ ...newProduct, category: event.target.value })}
               required
               className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
             <datalist id="categorias-existentes">
-              {availableCategories.map((cat) => (
-                <option key={cat} value={cat} />
+              {availableCategories.map((category) => (
+                <option key={category} value={category} />
               ))}
             </datalist>
             <input
               type="number"
               placeholder="Custo (R$)"
               value={newProduct.cost_price}
-              onChange={(e) => setNewProduct({ ...newProduct, cost_price: e.target.value })}
+              onChange={(event) => setNewProduct({ ...newProduct, cost_price: event.target.value })}
               required
               step="0.01"
               min="0"
@@ -325,7 +344,7 @@ export function ProductForm({
               type="number"
               placeholder="Peso físico/faturável padrão (kg)"
               value={newProduct.weight_kg}
-              onChange={(e) => setNewProduct({ ...newProduct, weight_kg: e.target.value })}
+              onChange={(event) => setNewProduct({ ...newProduct, weight_kg: event.target.value })}
               step="0.001"
               min="0"
               className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -336,8 +355,7 @@ export function ProductForm({
         <div>
           <h3 className="text-sm font-semibold text-gray-700 mb-1">Presença por plataforma</h3>
           <p className="text-xs text-gray-500 mb-3">
-            A prévia abaixo usa o mesmo motor da visão operacional. Quando o Mercado Livre estiver conectado,
-            a taxa oficial é consultada automaticamente e substitui a regra estática somente no contexto correspondente.
+            A prévia usa o mesmo motor da visão operacional. Programas condicionais são provisionados conforme a política e podem ser confirmados por anúncio.
           </p>
 
           <div className="space-y-3">
@@ -345,8 +363,11 @@ export function ProductForm({
               const entry = newListings[platform.id] || {}
               const preview = previewForPlatform(platform)
               const isML = platform.name === ML_PLATFORM_NAME
+              const isTikTok = platform.name === TIKTOK_PLATFORM_NAME
               const liveRecord = liveFees[platform.id]
               const liveIsCurrent = liveRecord?.key === liveQueryKey(entry, newProduct.weight_kg)
+              const tikTokProgramStatus =
+                entry.program_config?.tiktok_shipping_fee_program || 'unknown'
 
               return (
                 <div key={platform.id} className="border border-gray-200 rounded-lg p-3">
@@ -354,7 +375,7 @@ export function ProductForm({
                     <input
                       type="checkbox"
                       checked={Boolean(entry.enabled)}
-                      onChange={() => toggleListingPlatform(platform.id)}
+                      onChange={() => setListingField(platform.id, 'enabled', !entry.enabled)}
                       className="w-4 h-4 rounded border-gray-300"
                     />
                     <span className="w-36 text-sm font-medium text-gray-700">{platform.name}</span>
@@ -363,7 +384,7 @@ export function ProductForm({
                       placeholder="Preço de venda (R$)"
                       disabled={!entry.enabled}
                       value={entry.sale_price || ''}
-                      onChange={(e) => setListingPrice(platform.id, e.target.value)}
+                      onChange={(event) => setListingPrice(platform.id, event.target.value)}
                       step="0.01"
                       min="0"
                       className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 disabled:text-gray-400"
@@ -371,7 +392,7 @@ export function ProductForm({
                     {isML && entry.enabled && (
                       <select
                         value={entry.listing_type || ''}
-                        onChange={(e) => setListingField(platform.id, 'listing_type', e.target.value)}
+                        onChange={(event) => setListingField(platform.id, 'listing_type', event.target.value)}
                         required
                         className="px-2 py-1.5 border border-gray-300 rounded-lg text-sm"
                       >
@@ -387,13 +408,13 @@ export function ProductForm({
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <input
                           value={entry.platform_category_id || ''}
-                          onChange={(e) => setListingField(platform.id, 'platform_category_id', e.target.value.trim())}
+                          onChange={(event) => setListingField(platform.id, 'platform_category_id', event.target.value.trim())}
                           placeholder="Categoria ML (ex.: MLB1234)"
                           className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
                         />
                         <select
                           value={entry.logistic_type || ''}
-                          onChange={(e) => setListingField(platform.id, 'logistic_type', e.target.value)}
+                          onChange={(event) => setListingField(platform.id, 'logistic_type', event.target.value)}
                           className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
                         >
                           <option value="">Tipo logístico...</option>
@@ -409,7 +430,7 @@ export function ProductForm({
                         </select>
                         <select
                           value={entry.shipping_mode || ''}
-                          onChange={(e) => setListingField(platform.id, 'shipping_mode', e.target.value)}
+                          onChange={(event) => setListingField(platform.id, 'shipping_mode', event.target.value)}
                           className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
                         >
                           <option value="">Modo de envio...</option>
@@ -423,7 +444,7 @@ export function ProductForm({
                           step="0.001"
                           min="0"
                           value={entry.billable_weight_kg || ''}
-                          onChange={(e) => setListingField(platform.id, 'billable_weight_kg', e.target.value)}
+                          onChange={(event) => setListingField(platform.id, 'billable_weight_kg', event.target.value)}
                           placeholder={`Peso faturável kg${newProduct.weight_kg ? ` (padrão ${newProduct.weight_kg})` : ''}`}
                           className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
                         />
@@ -432,7 +453,7 @@ export function ProductForm({
                           step="0.1"
                           min="0"
                           value={entry.length_cm || ''}
-                          onChange={(e) => setListingField(platform.id, 'length_cm', e.target.value)}
+                          onChange={(event) => setListingField(platform.id, 'length_cm', event.target.value)}
                           placeholder="Comprimento cm"
                           className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
                         />
@@ -442,7 +463,7 @@ export function ProductForm({
                             step="0.1"
                             min="0"
                             value={entry.width_cm || ''}
-                            onChange={(e) => setListingField(platform.id, 'width_cm', e.target.value)}
+                            onChange={(event) => setListingField(platform.id, 'width_cm', event.target.value)}
                             placeholder="Largura cm"
                             className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
                           />
@@ -451,7 +472,7 @@ export function ProductForm({
                             step="0.1"
                             min="0"
                             value={entry.height_cm || ''}
-                            onChange={(e) => setListingField(platform.id, 'height_cm', e.target.value)}
+                            onChange={(event) => setListingField(platform.id, 'height_cm', event.target.value)}
                             placeholder="Altura cm"
                             className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
                           />
@@ -461,7 +482,7 @@ export function ProductForm({
                       <div className="mt-2 text-xs">
                         {!mlConnected ? (
                           <span className="text-amber-700">
-                            Conecte a conta do Mercado Livre na aba Conexões para substituir automaticamente a estimativa pela taxa da API.
+                            Conecte a conta do Mercado Livre na aba Conexões para substituir a estimativa pela taxa da API.
                           </span>
                         ) : liveLoading[platform.id] ? (
                           <span className="text-blue-700">Consultando taxa do Mercado Livre…</span>
@@ -475,10 +496,36 @@ export function ProductForm({
                           </span>
                         ) : (
                           <span className="text-gray-500">
-                            Preencha categoria ML, tipo de anúncio e preço para consultar a taxa automaticamente.
+                            Preencha categoria ML, tipo de anúncio e preço para consultar automaticamente.
                           </span>
                         )}
                       </div>
+                    </div>
+                  )}
+
+                  {isTikTok && entry.enabled && (
+                    <div className="ml-7 mt-3 rounded-lg bg-slate-50 border border-slate-200 p-3">
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Programa de Taxas de Envio TikTok
+                      </label>
+                      <select
+                        value={tikTokProgramStatus}
+                        onChange={(event) =>
+                          setProgramField(
+                            platform.id,
+                            'tiktok_shipping_fee_program',
+                            event.target.value
+                          )
+                        }
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white w-full sm:w-auto"
+                      >
+                        <option value="unknown">Não sei / confirmar no Seller Center</option>
+                        <option value="enrolled">Participa do programa</option>
+                        <option value="opted_out">Opt-out / não participa</option>
+                      </select>
+                      <p className="mt-2 text-xs text-gray-500">
+                        A plataforma informa inclusão automática por padrão. Em “não sei”, o motor provisiona 6% sobre o preço de venda, limitado a R$ 50 por produto, e mantém um alerta até a confirmação. Opt-out remove essa cobrança.
+                      </p>
                     </div>
                   )}
 
@@ -524,15 +571,29 @@ export function ProductForm({
                               ? 'regra verificada'
                               : 'regra estática/estimativa'}
                       </span>
-                      {preview.rule?.warning && (
-                        <div className="text-amber-700 mt-1">⚠️ {preview.rule.warning}</div>
+
+                      {preview.fixedFeeLabel && (
+                        <div className="text-gray-600 mt-1">
+                          Taxa por item ajustada: R$ {preview.fixedFee.toFixed(2)} · {preview.fixedFeeLabel}
+                        </div>
                       )}
+
+                      {preview.platformCharges?.map((charge) => (
+                        <div key={charge.code || charge.name} className="text-gray-600 mt-1">
+                          {charge.name}: -R$ {charge.amount.toFixed(2)}
+                          {charge.capAmount != null ? ` (teto R$ ${Number(charge.capAmount).toFixed(2)})` : ''}
+                        </div>
+                      ))}
+
+                      {preview.calculationWarnings?.map((warning) => (
+                        <div key={warning} className="text-amber-700 mt-1">⚠️ {warning}</div>
+                      ))}
                     </div>
                   )}
 
                   {preview?.status === 'sem_regra' && (
                     <p className="ml-7 mt-2 text-xs text-orange-600">
-                      ⚠️ Sem regra de taxa aplicável nessa plataforma; o anúncio ficará registrado, mas a margem dependerá de validação/API.
+                      ⚠️ Sem regra de taxa aplicável nessa plataforma; o anúncio será registrado, mas a margem dependerá de validação/API.
                     </p>
                   )}
                 </div>
@@ -548,7 +609,7 @@ export function ProductForm({
         )}
 
         <p className="text-xs text-gray-400">
-          O salvamento de produto, anúncios e custos é transacional: ou todas as alterações são aplicadas, ou nenhuma é gravada.
+          O salvamento de produto, anúncios, programas e custos é transacional: ou todas as alterações são aplicadas, ou nenhuma é gravada.
         </p>
 
         <div className="flex gap-2">
