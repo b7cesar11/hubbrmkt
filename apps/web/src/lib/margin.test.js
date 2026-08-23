@@ -54,6 +54,15 @@ describe('getListing', () => {
   it('encontra listing por produto/plataforma', () => {
     expect(getListing('prod-1', 'plat-1', [makeListing()])?.id).toBe('listing-1')
   })
+
+  it('prefere a conta padrão quando há múltiplas contas do mesmo marketplace', () => {
+    const listings = [
+      makeListing({ id: 'a', marketplace_account_id: 'a', marketplace_account: { id: 'a', is_default: false } }),
+      makeListing({ id: 'b', marketplace_account_id: 'b', marketplace_account: { id: 'b', is_default: true } }),
+    ]
+    expect(getListing('prod-1', 'plat-1', listings)?.id).toBe('b')
+    expect(getListing('prod-1', 'plat-1', listings, 'a')?.id).toBe('a')
+  })
 })
 
 describe('findApplicableRule', () => {
@@ -80,6 +89,12 @@ describe('findApplicableRule', () => {
     const fallback = makeRule({ id: 'fallback', listing_type: null })
     const premium = makeRule({ id: 'premium', listing_type: 'premium' })
     expect(findApplicableRule('plat-1', 'x', 100, 'premium', [fallback, premium], TODAY)?.id).toBe('premium')
+  })
+
+  it('seleciona regra específica do tipo de conta', () => {
+    const cnpj = makeRule({ id: 'cnpj', account_type: 'cnpj' })
+    const cpf = makeRule({ id: 'cpf', account_type: 'cpf' })
+    expect(findApplicableRule('plat-1', 'x', 100, null, [cnpj, cpf], TODAY, 'cpf')?.id).toBe('cpf')
   })
 
   it('em empate prefere a regra com valid_from mais recente', () => {
@@ -122,27 +137,45 @@ describe('computeMargin', () => {
     expect(computeMargin(baseProduct, 'plat-1', { ...baseDeps, listings: [] }).status).toBe('sem_preco')
   })
 
-  it('status sem_regra quando não há regra nem liveFee', () => {
+  it('status sem_regra quando não há regra oficial', () => {
     expect(computeMargin(baseProduct, 'plat-1', { ...baseDeps, feeRules: [] }).status).toBe('sem_regra')
   })
 
-  it('calcula margem estática corretamente', () => {
+  it('calcula margem pela regra oficial corretamente', () => {
     const r = computeMargin(baseProduct, 'plat-1', baseDeps)
-    expect(r.calculationMode).toBe('static_rule')
+    expect(r.calculationMode).toBe('official_rule')
     expect(r.commission).toBe(10)
     expect(r.fixedFee).toBe(5)
     expect(r.netMargin).toBeCloseTo(45, 5)
   })
 
-  it('liveFee tem precedência sobre regra estática', () => {
+  it('liveFee não substitui a regra automaticamente', () => {
     const r = computeMargin(baseProduct, 'plat-1', {
       ...baseDeps,
       liveFee: { commission_pct: 12, fixed_fee: 7, source: 'live' },
     })
-    expect(r.calculationMode).toBe('api_live_or_cache')
+    expect(r.calculationMode).toBe('official_rule')
+    expect(r.commission).toBe(10)
+    expect(r.fixedFee).toBe(5)
+  })
+
+  it('liveFee só pode ser usado explicitamente em modo diagnóstico', () => {
+    const r = computeMargin(baseProduct, 'plat-1', {
+      ...baseDeps,
+      allowLiveFee: true,
+      liveFee: { commission_pct: 12, fixed_fee: 7, source: 'live' },
+    })
+    expect(r.calculationMode).toBe('api_diagnostic')
     expect(r.commission).toBe(12)
     expect(r.fixedFee).toBe(7)
     expect(r.rule.source_kind).toBe('api')
+  })
+
+  it('ignora regra marcada explicitamente como estimativa', () => {
+    const estimate = makeRule({ source_kind: 'static', confidence_status: 'estimate' })
+    const r = computeMargin(baseProduct, 'plat-1', { ...baseDeps, feeRules: [estimate] })
+    expect(r.status).toBe('sem_regra')
+    expect(r.officialOnly).toBe(true)
   })
 
   it('aplica custo adicional percentual com cap', () => {
