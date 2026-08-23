@@ -106,8 +106,10 @@ export function calculateCostComponent(component, value, listing) {
 }
 
 /**
- * Calcula margem projetada. liveFee, quando fornecida, tem precedência sobre regra estática.
- * liveFee = { commission_pct, fixed_fee, source, fetched_at, raw }
+ * Calcula margem projetada.
+ * Uma liveFee passada explicitamente (ex.: prévia do cadastro) tem precedência.
+ * Na operação normal, o hook de dados pode anexar `listing.live_fee_override`
+ * quando encontrar um cache vigente e exato para aquele anúncio.
  */
 export function computeMargin(product, platformId, deps) {
   const {
@@ -123,6 +125,7 @@ export function computeMargin(product, platformId, deps) {
   const listing = getListing(product.id, platformId, listings)
   if (!listing) return { status: 'sem_preco' }
 
+  const effectiveLiveFee = liveFee || listing.live_fee_override || null
   const category = listing.platform_category_name || product.category
   const staticRule = findApplicableRule(
     platformId,
@@ -133,18 +136,18 @@ export function computeMargin(product, platformId, deps) {
     asOf,
   )
 
-  const hasLiveFee = liveFee && Number.isFinite(Number(liveFee.commission_pct))
+  const hasLiveFee = effectiveLiveFee && Number.isFinite(Number(effectiveLiveFee.commission_pct))
   const rule = hasLiveFee
     ? {
         ...(staticRule || {}),
-        commission_pct: Number(liveFee.commission_pct),
-        fixed_fee: Number(liveFee.fixed_fee || 0),
+        commission_pct: Number(effectiveLiveFee.commission_pct),
+        fixed_fee: Number(effectiveLiveFee.fixed_fee || 0),
         source_kind: 'api',
-        confidence_status: liveFee.confidence || 'account_specific',
-        live_fee_source: liveFee.source,
-        fetched_at: liveFee.fetched_at,
-        exact: liveFee.exact ?? null,
-        warning: liveFee.warning ?? null,
+        confidence_status: effectiveLiveFee.confidence || 'account_specific',
+        live_fee_source: effectiveLiveFee.source,
+        fetched_at: effectiveLiveFee.fetched_at,
+        exact: effectiveLiveFee.exact ?? null,
+        warning: effectiveLiveFee.warning ?? null,
       }
     : staticRule
 
@@ -208,7 +211,11 @@ export function computeMargin(product, platformId, deps) {
 
   return {
     status: 'ok',
-    calculationMode: hasLiveFee ? 'api_live_or_cache' : 'static_rule',
+    calculationMode: hasLiveFee
+      ? rule.exact === false
+        ? 'api_partial'
+        : 'api_live_or_cache'
+      : 'static_rule',
     salePrice,
     commission,
     fixedFee,
