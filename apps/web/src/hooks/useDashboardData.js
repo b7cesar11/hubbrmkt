@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
-import { attachExactLiveFees } from '../lib/liveFeeCache'
 
 /**
- * Hook que carrega e gerencia todos os dados do Supabase
- * necessários para o dashboard.
+ * Hook que carrega e gerencia os dados operacionais do dashboard.
+ * As margens são calculadas com regras oficiais; integrações live não são
+ * promovidas automaticamente para o cálculo.
  */
 export function useDashboardData(user) {
   const [products, setProducts] = useState([])
   const [platforms, setPlatforms] = useState([])
+  const [marketplaceAccounts, setMarketplaceAccounts] = useState([])
   const [feeRules, setFeeRules] = useState([])
   const [listings, setListings] = useState([])
   const [costComponents, setCostComponents] = useState([])
@@ -16,7 +17,6 @@ export function useDashboardData(user) {
   const [promotions, setPromotions] = useState([])
   const [companyUsers, setCompanyUsers] = useState([])
   const [coverageGaps, setCoverageGaps] = useState([])
-  const [liveFeeCache, setLiveFeeCache] = useState([])
   const [companyId, setCompanyId] = useState(null)
   const [userRole, setUserRole] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -26,6 +26,7 @@ export function useDashboardData(user) {
     if (!user?.id) return
     setLoading(true)
     setError(null)
+
     try {
       const { data: userRow, error: userError } = await supabase
         .from('users')
@@ -40,7 +41,7 @@ export function useDashboardData(user) {
       if (userRow?.company_id) {
         const { data: usersData, error: usersError } = await supabase
           .from('users')
-          .select('id, email, role, company_id')
+          .select('id, email, role, company_id, full_name')
           .eq('company_id', userRow.company_id)
         if (!usersError) setCompanyUsers(usersData || [])
       }
@@ -48,50 +49,51 @@ export function useDashboardData(user) {
       const [
         productsRes,
         platformsRes,
+        accountsRes,
         rulesRes,
         listingsRes,
         costComponentsRes,
         listingCostComponentsRes,
         gapsRes,
         promotionsRes,
-        liveFeesRes,
       ] = await Promise.all([
         supabase.from('products').select('*'),
         supabase.from('platforms').select('*'),
+        supabase.from('marketplace_accounts').select('*').order('created_at', { ascending: true }),
         supabase.from('platform_fee_rules').select('*'),
         supabase.from('product_listings').select('*'),
         supabase.from('cost_components').select('*'),
         supabase.from('listing_cost_components').select('*'),
         supabase.from('category_coverage_gaps').select('*').eq('status', 'pending_validation'),
         supabase.from('platform_promotions').select('*'),
-        supabase
-          .from('live_fee_cache')
-          .select(
-            'id, platform_id, category_id, listing_type, price, commission_pct, fixed_fee, fetched_at, expires_at, logistic_type, shipping_mode, billable_weight_kg, is_exact, confidence_status, warning'
-          )
-          .gt('expires_at', new Date().toISOString()),
       ])
 
       if (productsRes.error) throw productsRes.error
       if (platformsRes.error) throw platformsRes.error
+      if (accountsRes.error) throw accountsRes.error
       if (rulesRes.error) throw rulesRes.error
       if (listingsRes.error) throw listingsRes.error
       if (costComponentsRes.error) throw costComponentsRes.error
       if (listingCostComponentsRes.error) throw listingCostComponentsRes.error
       if (gapsRes.error) throw gapsRes.error
       if (promotionsRes.error) throw promotionsRes.error
-      if (liveFeesRes.error) throw liveFeesRes.error
 
-      const liveFees = liveFeesRes.data || []
+      const accounts = accountsRes.data || []
+      const accountById = new Map(accounts.map((account) => [account.id, account]))
+      const enrichedListings = (listingsRes.data || []).map((listing) => ({
+        ...listing,
+        marketplace_account: accountById.get(listing.marketplace_account_id) || null,
+      }))
+
       setProducts(productsRes.data || [])
       setPlatforms(platformsRes.data || [])
+      setMarketplaceAccounts(accounts)
       setFeeRules(rulesRes.data || [])
-      setListings(attachExactLiveFees(listingsRes.data || [], liveFees))
+      setListings(enrichedListings)
       setCoverageGaps(gapsRes.data || [])
       setCostComponents(costComponentsRes.data || [])
       setListingCostComponents(listingCostComponentsRes.data || [])
       setPromotions(promotionsRes.data || [])
-      setLiveFeeCache(liveFees)
     } catch (err) {
       console.error('Erro ao carregar dados:', err)
       setError(err.message)
@@ -114,6 +116,8 @@ export function useDashboardData(user) {
     products,
     setProducts,
     platforms,
+    marketplaceAccounts,
+    setMarketplaceAccounts,
     feeRules,
     setFeeRules,
     listings,
@@ -128,7 +132,6 @@ export function useDashboardData(user) {
     setCompanyUsers,
     coverageGaps,
     setCoverageGaps,
-    liveFeeCache,
     companyId,
     userRole,
     loading,
