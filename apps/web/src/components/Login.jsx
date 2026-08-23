@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 
 export default function Login({ onLogin }) {
   const [mode, setMode] = useState('signin') // signin | signup
+  const [companyName, setCompanyName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
@@ -21,7 +22,6 @@ export default function Login({ onLogin }) {
       })
 
       if (error) throw error
-
       onLogin(data.user)
     } catch (err) {
       setError(err.message)
@@ -37,14 +37,21 @@ export default function Login({ onLogin }) {
     setLoading(true)
 
     try {
-      const { data, error } = await supabase.auth.signUp({ email, password })
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            company_name: companyName.trim(),
+          },
+        },
+      })
       if (error) throw error
 
       if (data.session) {
-        // Confirmação de e-mail desativada — já loga direto
         onLogin(data.user)
       } else {
-        setInfo('Conta criada. Confirme seu e-mail (se a confirmação estiver ativa) e faça login.')
+        setInfo('Conta e empresa criadas. Confirme seu e-mail (se a confirmação estiver ativa) e faça login.')
         setMode('signin')
       }
     } catch (err) {
@@ -64,6 +71,26 @@ export default function Login({ onLogin }) {
           </div>
 
           <form onSubmit={mode === 'signin' ? handleSignIn : handleSignUp} className="space-y-6">
+            {mode === 'signup' && (
+              <div>
+                <label htmlFor="company-name" className="block text-sm font-medium text-gray-700 mb-2">
+                  Nome da empresa
+                </label>
+                <input
+                  id="company-name"
+                  type="text"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  required
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                  placeholder="Minha empresa"
+                />
+                <p className="mt-1 text-xs text-gray-400">
+                  Cada conta começa em uma empresa própria e isolada.
+                </p>
+              </div>
+            )}
+
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
                 E-mail
@@ -111,7 +138,7 @@ export default function Login({ onLogin }) {
               disabled={loading}
               className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold py-3 rounded-lg transition-colors duration-200"
             >
-              {loading ? 'Aguarde...' : mode === 'signin' ? 'Entrar' : 'Criar conta'}
+              {loading ? 'Aguarde...' : mode === 'signin' ? 'Entrar' : 'Criar conta e empresa'}
             </button>
           </form>
 
