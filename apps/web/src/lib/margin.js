@@ -1,10 +1,19 @@
 /**
  * margin.js — motor puro de cálculo de margem projetada.
- * Sem dependências de React/Supabase; testável com Vitest.
+ * Regra de produto: o cálculo operacional usa somente tarifas oficiais confirmadas.
+ * Estimativas permanecem no banco para pesquisa/auditoria, mas não entram na margem.
  */
 
-export function getListing(productId, platformId, listings) {
-  return listings.find((l) => l.product_id === productId && l.platform_id === platformId)
+export function getListing(productId, platformId, listings, marketplaceAccountId = null) {
+  const candidates = listings.filter(
+    (listing) =>
+      listing.product_id === productId &&
+      listing.platform_id === platformId &&
+      (!marketplaceAccountId || listing.marketplace_account_id === marketplaceAccountId)
+  )
+
+  if (marketplaceAccountId) return candidates[0]
+  return candidates.find((listing) => listing.marketplace_account?.is_default) || candidates[0]
 }
 
 /** Retorna YYYY-MM-DD usando o calendário local do navegador, sem conversão UTC. */
@@ -24,8 +33,15 @@ function normalizeText(value) {
     .toLocaleLowerCase('pt-BR')
 }
 
+export function isOfficialFeeRule(rule) {
+  // Compatibilidade com fixtures antigas dos testes; em produção as colunas existem.
+  if (rule?.source_kind == null && rule?.confidence_status == null) return true
+  return rule?.source_kind === 'official' && rule?.confidence_status === 'confirmed'
+}
+
 function ruleSpecificity(rule, category, listingType) {
   let score = 0
+  if (rule.account_type !== null && rule.account_type !== undefined) score += 8
   if (rule.category !== null) score += normalizeText(rule.category) === normalizeText(category) ? 4 : -100
   if (rule.listing_type !== null) score += normalizeText(rule.listing_type) === normalizeText(listingType) ? 2 : -100
   return score
@@ -38,12 +54,14 @@ export function findApplicableRule(
   listingType,
   feeRules,
   asOf = new Date(),
+  accountType = null,
 ) {
   const today = typeof asOf === 'string' ? asOf : localDateKey(asOf)
 
   return feeRules
     .filter((rule) => {
       if (rule.platform_id !== platformId) return false
+      if (rule.account_type != null && normalizeText(rule.account_type) !== normalizeText(accountType)) return false
       if (rule.category !== null && normalizeText(rule.category) !== normalizeText(category)) return false
       if (rule.listing_type !== null && normalizeText(rule.listing_type) !== normalizeText(listingType)) return false
       if (rule.valid_from && today < rule.valid_from) return false
@@ -119,6 +137,46 @@ function evaluateRuleChargeCondition(charge, listing) {
   return { applies: false, warning: null }
 }
 
+function validateOfficialRuleContext(rule, listing) {
+  const config = rule?.calculation_config || {}
+  const profile = listing.program_config || {}
+  const salePrice = Number(listing.sale_price || 0)
+
+  for (const requirement of config.required_profile_fields || []) {
+    const value = profile[requirement.key]
+    const allowed = Array.isArray(requirement.allowed) ? requirement.allowed : []
+    if (value == null || value === 'unknown' || (allowed.length > 0 && !allowed.includes(value))) {
+      return {
+        status: 'configuracao_conta_pendente',
+        reason: requirement.message || `Complete o campo ${requirement.key} no cadastro da conta.`,
+        field: requirement.key,
+      }
+    }
+  }
+
+  const below = config.unsupported_below_price
+  if (below?.threshold != null && salePrice < Number(below.threshold)) {
+    return {
+      status: 'taxa_oficial_incompleta',
+      reason: below.message || 'A fonte oficial consultada não expõe fórmula completa para esta faixa.',
+    }
+  }
+
+  const unsupportedExactPrices = Array.isArray(config.unsupported_exact_prices)
+    ? config.unsupported_exact_prices.map(Number)
+    : []
+  if (unsupportedExactPrices.some((value) => Math.abs(value - salePrice) < 0.000001)) {
+    return {
+      status: 'taxa_oficial_incompleta',
+      reason:
+        config.unsupported_exact_prices_message ||
+        'A fonte oficial não deixa explícito o enquadramento deste valor exato.',
+    }
+  }
+
+  return null
+}
+
 /** Interpreta fórmulas declaradas em platform_fee_rules.calculation_config. */
 export function calculateRuleCharges(rule, listing) {
   const config = rule?.calculation_config || {}
@@ -185,43 +243,76 @@ export function computeMargin(product, platformId, deps) {
     listingCostComponents,
     costComponents,
     liveFee = null,
+    allowLiveFee = false,
+    marketplaceAccountId = null,
     asOf = new Date(),
   } = deps
 
-  const listing = getListing(product.id, platformId, listings)
+  const listing = getListing(product.id, platformId, listings, marketplaceAccountId)
   if (!listing) return { status: 'sem_preco' }
 
-  const effectiveLiveFee = liveFee || listing.live_fee_override || null
+  const account = listing.marketplace_account || null
+  const accountType = account?.document_type || listing.account_type || null
+  const effectiveListing = {
+    ...listing,
+    program_config: {
+      ...(account?.profile_config || {}),
+      ...(listing.program_config || {}),
+    },
+  }
+
   const category = listing.platform_category_name || product.category
+  const officialRules = feeRules.filter(isOfficialFeeRule)
   const staticRule = findApplicableRule(
     platformId,
     category,
     Number(listing.sale_price),
     listing.listing_type,
-    feeRules,
+    officialRules,
     asOf,
+    accountType,
   )
 
-  const hasLiveFee = effectiveLiveFee && Number.isFinite(Number(effectiveLiveFee.commission_pct))
+  // Integrações não fazem parte do fluxo comercial atual. Este caminho fica apenas
+  // para diagnóstico explícito e nunca é ativado automaticamente pelo dashboard.
+  const hasLiveFee =
+    allowLiveFee && liveFee && Number.isFinite(Number(liveFee.commission_pct))
+
   const rule = hasLiveFee
     ? {
         ...(staticRule || {}),
-        commission_pct: Number(effectiveLiveFee.commission_pct),
-        fixed_fee: Number(effectiveLiveFee.fixed_fee || 0),
+        commission_pct: Number(liveFee.commission_pct),
+        fixed_fee: Number(liveFee.fixed_fee || 0),
         source_kind: 'api',
-        confidence_status: effectiveLiveFee.confidence || 'account_specific',
-        live_fee_source: effectiveLiveFee.source,
-        fetched_at: effectiveLiveFee.fetched_at,
-        exact: effectiveLiveFee.exact ?? null,
-        warning: effectiveLiveFee.warning ?? null,
+        confidence_status: liveFee.confidence || 'account_specific',
+        live_fee_source: liveFee.source,
+        fetched_at: liveFee.fetched_at,
+        exact: liveFee.exact ?? null,
+        warning: liveFee.warning ?? null,
       }
     : staticRule
 
-  if (!rule) return { status: 'sem_regra' }
+  if (!rule) {
+    const platformOfficialRules = officialRules.filter((candidate) => candidate.platform_id === platformId)
+    const requiresAccountType = platformOfficialRules.some((candidate) => candidate.account_type != null)
+    return {
+      status: 'sem_regra',
+      reason:
+        requiresAccountType && !accountType
+          ? 'Complete o tipo da conta (CPF/CNPJ) antes de calcular.'
+          : 'Não há uma regra oficial confirmada aplicável a este anúncio.',
+      officialOnly: true,
+    }
+  }
+
+  if (!hasLiveFee) {
+    const contextIssue = validateOfficialRuleContext(rule, effectiveListing)
+    if (contextIssue) return { ...contextIssue, officialOnly: true, rule }
+  }
 
   const salePrice = Number(listing.sale_price)
   const commission = (salePrice * Number(rule.commission_pct || 0)) / 100
-  const ruleCharges = calculateRuleCharges(rule, listing)
+  const ruleCharges = calculateRuleCharges(rule, effectiveListing)
   const fixedFee = ruleCharges.fixedFee
 
   const applicablePromotions = getApplicablePromotions(platformId, category, promotions, asOf)
@@ -258,7 +349,7 @@ export function computeMargin(product, platformId, deps) {
       const component = costComponents.find((candidate) => candidate.id === lcc.cost_component_id)
       if (!component) return null
       const value = lcc.value_override ?? component.default_value
-      const amount = calculateCostComponent(component, value, listing)
+      const amount = calculateCostComponent(component, value, effectiveListing)
       return {
         name: component.name,
         amount,
@@ -287,11 +378,7 @@ export function computeMargin(product, platformId, deps) {
 
   return {
     status: 'ok',
-    calculationMode: hasLiveFee
-      ? rule.exact === false
-        ? 'api_partial'
-        : 'api_live_or_cache'
-      : 'static_rule',
+    calculationMode: hasLiveFee ? 'api_diagnostic' : 'official_rule',
     salePrice,
     commission,
     fixedFee,
@@ -308,5 +395,7 @@ export function computeMargin(product, platformId, deps) {
     netMargin,
     marginPct,
     rule,
+    marketplaceAccount: account,
+    officialOnly: !hasLiveFee,
   }
 }
