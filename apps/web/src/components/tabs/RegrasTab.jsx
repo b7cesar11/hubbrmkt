@@ -4,8 +4,15 @@ import { localDateKey } from '../../lib/margin'
 import { supabase } from '../../lib/supabase'
 
 function ruleStatus(rule) {
-  if (rule.confidence_status === 'verified') return { label: '✅ Verificada', cls: 'bg-green-100 text-green-700' }
-  if (rule.confidence_status === 'account_specific') return { label: '🔐 Conta/API', cls: 'bg-blue-100 text-blue-700' }
+  if (rule.confidence_status === 'confirmed') {
+    return { label: '✅ Confirmada', cls: 'bg-green-100 text-green-700' }
+  }
+  if (rule.confidence_status === 'account_specific') {
+    return { label: '🔐 Conta/API', cls: 'bg-blue-100 text-blue-700' }
+  }
+  if (rule.confidence_status === 'deprecated') {
+    return { label: '⏸️ Descontinuada', cls: 'bg-gray-100 text-gray-600' }
+  }
   return { label: '⚠️ Estimativa', cls: 'bg-orange-100 text-orange-700' }
 }
 
@@ -33,7 +40,7 @@ export function RegrasTab({
       commission_pct: String(rule.commission_pct ?? ''),
       fixed_fee: String(rule.fixed_fee ?? '0'),
       source_url: rule.source_url || '',
-      source_kind: rule.source_kind || 'estimate',
+      source_kind: rule.source_kind || 'static',
       confidence_status: rule.confidence_status || 'estimate',
     })
   }
@@ -279,7 +286,7 @@ export function RegrasTab({
                               <option value="official">Oficial</option>
                               <option value="seller_panel">Painel seller</option>
                               <option value="api">API</option>
-                              <option value="estimate">Estimativa</option>
+                              <option value="static">Regra estática</option>
                               <option value="manual">Manual</option>
                             </select>
                             <select
@@ -287,10 +294,10 @@ export function RegrasTab({
                               onChange={(event) => setEditForm({ ...editForm, confidence_status: event.target.value })}
                               className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
                             >
-                              <option value="verified">Verificada</option>
+                              <option value="confirmed">Confirmada</option>
                               <option value="account_specific">Específica da conta</option>
                               <option value="estimate">Estimativa</option>
-                              <option value="needs_validation">A validar</option>
+                              <option value="deprecated">Descontinuada</option>
                             </select>
                             <div className="flex gap-2">
                               <button
