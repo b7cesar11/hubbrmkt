@@ -1,127 +1,346 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { Link2, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react'
-import {
-  startMercadoLivreConnect,
-  getMarketplaceConnections,
-  queryMercadoLivreFee,
-} from '../../lib/marketplaceConnections'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { AlertCircle, CheckCircle2, RefreshCw, Store } from 'lucide-react'
+import { supabase } from '../../lib/supabase'
 
-const ML_PLATFORM_NAME = 'Mercado Livre'
+const SHOPEE = 'Shopee'
+const TIKTOK = 'TikTok Shop'
 
-function StatusBadge({ status }) {
-  const map = {
-    connected: { cls: 'bg-green-100 text-green-700', label: 'Conectado' },
-    disconnected: { cls: 'bg-gray-100 text-gray-600', label: 'Desconectado' },
-    expired: { cls: 'bg-amber-100 text-amber-700', label: 'Expirado — reconectar' },
-    error: { cls: 'bg-red-100 text-red-700', label: 'Erro — reconectar' },
+function accountIssue(account, platformName) {
+  if (platformName === SHOPEE) {
+    if (!['cpf', 'cnpj'].includes(account.document_type)) return 'Defina CPF ou CNPJ.'
+    if (
+      account.document_type === 'cpf' &&
+      !['under_450', 'over_450'].includes(account.profile_config?.shopee_cpf_order_band)
+    ) {
+      return 'Defina a faixa de pedidos dos últimos 90 dias.'
+    }
   }
-  const s = map[status] || map.disconnected
-  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s.cls}`}>{s.label}</span>
+  if (
+    platformName === TIKTOK &&
+    !['enrolled', 'opted_out'].includes(account.profile_config?.tiktok_shipping_fee_program)
+  ) {
+    return 'Defina a participação no Programa de Taxas de Envio.'
+  }
+  return null
 }
 
 export function ConexoesTab({ companyId, userRole }) {
-  const [connections, setConnections] = useState([])
+  const [platforms, setPlatforms] = useState([])
+  const [accounts, setAccounts] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [testForm, setTestForm] = useState({
-    categoryId: '', price: '', listingType: 'classico',
-    logisticType: 'drop_off', shippingMode: 'me2', billableWeightKg: '',
+  const [editingId, setEditingId] = useState(null)
+  const [showForm, setShowForm] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({
+    platform_id: '',
+    name: '',
+    document_type: '',
+    shopee_cpf_order_band: '',
+    tiktok_shipping_fee_program: '',
+    is_default: false,
   })
-  const [testResult, setTestResult] = useState(null)
-  const [testing, setTesting] = useState(false)
-  const [testError, setTestError] = useState(null)
 
-  const loadConnections = useCallback(async () => {
+  const canManage = userRole === 'super_admin' || userRole === 'company_admin'
+  const platformById = useMemo(
+    () => new Map(platforms.map((platform) => [platform.id, platform])),
+    [platforms]
+  )
+  const selectedPlatform = platformById.get(form.platform_id)
+
+  const loadData = useCallback(async () => {
     if (!companyId) return
-    setLoading(true); setError(null)
-    try { setConnections(await getMarketplaceConnections()) }
-    catch (e) { setError(e.message || 'Falha ao carregar conexões.') }
-    finally { setLoading(false) }
+    setLoading(true)
+    setError(null)
+    try {
+      const [platformsRes, accountsRes] = await Promise.all([
+        supabase.from('platforms').select('*'),
+        supabase.from('marketplace_accounts').select('*').eq('active', true).order('created_at'),
+      ])
+      if (platformsRes.error) throw platformsRes.error
+      if (accountsRes.error) throw accountsRes.error
+      setPlatforms(platformsRes.data || [])
+      setAccounts(accountsRes.data || [])
+    } catch (loadError) {
+      setError(loadError.message || 'Falha ao carregar as contas.')
+    } finally {
+      setLoading(false)
+    }
   }, [companyId])
 
-  useEffect(() => { loadConnections() }, [loadConnections])
-  const mlConnection = connections.find((c) => c.platform_name === ML_PLATFORM_NAME)
-  const canManage = userRole === 'super_admin' || userRole === 'company_admin'
+  useEffect(() => {
+    loadData()
+  }, [loadData])
 
-  async function handleConnectMercadoLivre() {
+  function resetForm() {
+    setEditingId(null)
+    setForm({
+      platform_id: '',
+      name: '',
+      document_type: '',
+      shopee_cpf_order_band: '',
+      tiktok_shipping_fee_program: '',
+      is_default: false,
+    })
     setError(null)
-    try { window.location.href = await startMercadoLivreConnect() }
-    catch (e) { setError(e.message || 'Falha ao iniciar a conexão com o Mercado Livre.') }
+    setShowForm(false)
   }
 
-  async function handleTestFee(e) {
-    e.preventDefault(); setTesting(true); setTestError(null); setTestResult(null)
+  function editAccount(account) {
+    setEditingId(account.id)
+    setForm({
+      platform_id: account.platform_id,
+      name: account.name,
+      document_type: account.document_type || '',
+      shopee_cpf_order_band: account.profile_config?.shopee_cpf_order_band || '',
+      tiktok_shipping_fee_program: account.profile_config?.tiktok_shipping_fee_program || '',
+      is_default: Boolean(account.is_default),
+    })
+    setError(null)
+    setShowForm(true)
+  }
+
+  async function saveAccount(event) {
+    event.preventDefault()
+    setError(null)
+    const platform = platformById.get(form.platform_id)
+    if (!platform || !form.name.trim()) {
+      setError('Informe marketplace e nome da conta.')
+      return
+    }
+    if (platform.name === SHOPEE && !['cpf', 'cnpj'].includes(form.document_type)) {
+      setError('Na Shopee, o tipo de conta CPF/CNPJ é obrigatório para escolher a taxa oficial.')
+      return
+    }
+    if (
+      platform.name === SHOPEE &&
+      form.document_type === 'cpf' &&
+      !['under_450', 'over_450'].includes(form.shopee_cpf_order_band)
+    ) {
+      setError('Informe se a conta CPF ultrapassou 450 pedidos nos últimos 90 dias.')
+      return
+    }
+    if (
+      platform.name === TIKTOK &&
+      !['enrolled', 'opted_out'].includes(form.tiktok_shipping_fee_program)
+    ) {
+      setError('Informe se a conta participa do Programa de Taxas de Envio do TikTok.')
+      return
+    }
+
+    const profileConfig = {}
+    if (platform.name === SHOPEE && form.document_type === 'cpf') {
+      profileConfig.shopee_cpf_order_band = form.shopee_cpf_order_band
+    }
+    if (platform.name === TIKTOK) {
+      profileConfig.tiktok_shipping_fee_program = form.tiktok_shipping_fee_program
+    }
+
+    setSaving(true)
     try {
-      const res = await queryMercadoLivreFee({
-        categoryId: testForm.categoryId,
-        price: Number(testForm.price),
-        listingType: testForm.listingType,
-        logisticType: testForm.logisticType,
-        shippingMode: testForm.shippingMode,
-        billableWeightKg: testForm.billableWeightKg,
+      const { error: saveError } = await supabase.rpc('fn_upsert_marketplace_account', {
+        p_account_id: editingId || null,
+        p_platform_id: form.platform_id,
+        p_name: form.name.trim(),
+        p_document_type: form.document_type || null,
+        p_profile_config: profileConfig,
+        p_is_default: Boolean(form.is_default),
       })
-      if (res?.ok) setTestResult(res)
-      else setTestError(res?.error || 'Falha na consulta.')
-    } catch (err) { setTestError(err.message || 'Falha ao invocar a função de taxa.') }
-    finally { setTesting(false) }
+      if (saveError) throw saveError
+      await loadData()
+      window.dispatchEvent(new CustomEvent('margemhub:data-changed'))
+      resetForm()
+    } catch (saveError) {
+      setError(saveError.message || 'Não foi possível salvar a conta.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
     <div>
-      <div className="mb-4 flex justify-between items-center">
-        <h2 className="text-xl font-semibold text-gray-900">Conexões de Marketplace</h2>
-        <button onClick={loadConnections} className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900">
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
-        </button>
-      </div>
-
-      <p className="text-sm text-gray-500 mb-6">
-        Conecte a conta do marketplace para consultar taxas pela API oficial. Tokens ficam no backend.
-      </p>
-
-      {error && <div className="mb-4 flex items-start gap-2 bg-red-50 text-red-700 rounded-lg p-3 text-sm"><AlertCircle className="w-4 h-4 mt-0.5" /><span>{error}</span></div>}
-
-      <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-yellow-100 flex items-center justify-center"><Link2 className="w-5 h-5 text-yellow-700" /></div>
-            <div><h3 className="font-semibold text-gray-900">{ML_PLATFORM_NAME}</h3><div className="mt-1"><StatusBadge status={mlConnection?.status || 'disconnected'} /></div></div>
-          </div>
-          {canManage && <button onClick={handleConnectMercadoLivre} className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm"><Link2 className="w-4 h-4" />{mlConnection?.status === 'connected' ? 'Reconectar' : 'Conectar'}</button>}
+      <div className="mb-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900">Contas de marketplace</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Pré-cadastre cada operação. O tipo e os programas da conta determinam qual tabela oficial entra no cálculo.
+          </p>
         </div>
-        {mlConnection && <dl className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-          <div><dt className="text-gray-500">Vendedor (ID)</dt><dd>{mlConnection.external_seller_id || '—'}</dd></div>
-          <div><dt className="text-gray-500">Conectado em</dt><dd>{mlConnection.connected_at ? new Date(mlConnection.connected_at).toLocaleString('pt-BR') : '—'}</dd></div>
-          <div><dt className="text-gray-500">Token expira em</dt><dd>{mlConnection.token_expires_at ? new Date(mlConnection.token_expires_at).toLocaleString('pt-BR') : '—'}</dd></div>
-          {mlConnection.last_error && <div className="col-span-2 sm:col-span-4"><dt className="text-gray-500">Último erro</dt><dd className="text-red-600">{mlConnection.last_error}</dd></div>}
-        </dl>}
+        <div className="flex gap-3">
+          <button
+            onClick={loadData}
+            className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
+          </button>
+          {canManage && (
+            <button
+              onClick={() => {
+                resetForm()
+                setShowForm(true)
+              }}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              + Nova conta
+            </button>
+          )}
+        </div>
       </div>
 
-      {mlConnection?.status === 'connected' && <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-        <h3 className="font-semibold text-gray-900 mb-2">Testar taxa ao vivo (Mercado Livre)</h3>
-        <p className="text-xs text-gray-500 mb-3">Logística e modo de envio influenciam o custo fixo. Peso faturável é informado em kg no MargemHub e enviado em gramas à API.</p>
-        <form onSubmit={handleTestFee} className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <input type="text" placeholder="category_id (ex: MLB1234)" value={testForm.categoryId} onChange={(e)=>setTestForm({...testForm,categoryId:e.target.value})} required className="px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-            <input type="number" step="0.01" min="0.01" placeholder="Preço (R$)" value={testForm.price} onChange={(e)=>setTestForm({...testForm,price:e.target.value})} required className="px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-            <select value={testForm.listingType} onChange={(e)=>setTestForm({...testForm,listingType:e.target.value})} className="px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="classico">Clássico</option><option value="premium">Premium</option></select>
-            <select value={testForm.logisticType} onChange={(e)=>setTestForm({...testForm,logisticType:e.target.value})} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
-              <option value="drop_off">Drop off</option><option value="cross_docking">Coleta</option><option value="xd_drop_off">Places</option><option value="self_service">Flex</option><option value="turbo">Turbo</option><option value="fulfillment">Full</option><option value="default">Padrão</option><option value="custom">Custom</option><option value="not_specified">Não especificado</option>
+      <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+        <strong>Política de cálculo atual:</strong> somente regras oficiais confirmadas entram na margem. Integrações de API não são usadas automaticamente. Se uma fonte pública não expõe a fórmula exata, o MargemHub sinaliza a pendência em vez de estimar.
+      </div>
+
+      {error && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+          <AlertCircle className="w-4 h-4 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {showForm && canManage && (
+        <form onSubmit={saveAccount} className="mb-6 rounded-xl bg-white shadow-md p-5 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <select
+              value={form.platform_id}
+              onChange={(event) => setForm({ ...form, platform_id: event.target.value })}
+              required
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+            >
+              <option value="">Marketplace...</option>
+              {platforms.map((platform) => (
+                <option key={platform.id} value={platform.id}>{platform.name}</option>
+              ))}
             </select>
-            <select value={testForm.shippingMode} onChange={(e)=>setTestForm({...testForm,shippingMode:e.target.value})} className="px-3 py-2 border border-gray-300 rounded-lg text-sm"><option value="me2">Mercado Envios 2</option><option value="me1">Mercado Envios 1</option><option value="custom">Custom</option><option value="not_specified">Não especificado</option></select>
-            <input type="number" step="0.001" min="0.001" placeholder="Peso faturável (kg, opcional no Brasil)" value={testForm.billableWeightKg} onChange={(e)=>setTestForm({...testForm,billableWeightKg:e.target.value})} className="px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+            <input
+              value={form.name}
+              onChange={(event) => setForm({ ...form, name: event.target.value })}
+              placeholder="Nome para identificar a conta"
+              required
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            />
+            <select
+              value={form.document_type}
+              onChange={(event) => setForm({ ...form, document_type: event.target.value })}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+            >
+              <option value="">CPF/CNPJ não aplicável ou não informado</option>
+              <option value="cpf">CPF</option>
+              <option value="cnpj">CNPJ</option>
+            </select>
+
+            {selectedPlatform?.name === SHOPEE && form.document_type === 'cpf' && (
+              <select
+                value={form.shopee_cpf_order_band}
+                onChange={(event) => setForm({ ...form, shopee_cpf_order_band: event.target.value })}
+                required
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+              >
+                <option value="">Pedidos nos últimos 90 dias...</option>
+                <option value="under_450">Até 450 pedidos</option>
+                <option value="over_450">Mais de 450 pedidos</option>
+              </select>
+            )}
+
+            {selectedPlatform?.name === TIKTOK && (
+              <select
+                value={form.tiktok_shipping_fee_program}
+                onChange={(event) => setForm({ ...form, tiktok_shipping_fee_program: event.target.value })}
+                required
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+              >
+                <option value="">Programa de Taxas de Envio...</option>
+                <option value="enrolled">Participa</option>
+                <option value="opted_out">Não participa / opt-out</option>
+              </select>
+            )}
           </div>
-          <button type="submit" disabled={testing} className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm">{testing ? 'Consultando…' : 'Consultar taxa'}</button>
+
+          <label className="flex items-center gap-2 text-sm text-gray-600">
+            <input
+              type="checkbox"
+              checked={form.is_default}
+              onChange={(event) => setForm({ ...form, is_default: event.target.checked })}
+            />
+            Conta padrão para este marketplace
+          </label>
+
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+            >
+              {saving ? 'Salvando…' : editingId ? 'Salvar alterações' : 'Cadastrar conta'}
+            </button>
+            <button type="button" onClick={resetForm} className="rounded-lg bg-gray-100 px-4 py-2 text-sm text-gray-600">
+              Cancelar
+            </button>
+          </div>
         </form>
+      )}
 
-        {testError && <div className="mt-3 flex items-start gap-2 bg-red-50 text-red-700 rounded-lg p-3 text-sm"><AlertCircle className="w-4 h-4 mt-0.5" /><span>{testError}</span></div>}
-        {testResult && <div className={`${testResult.exact ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'} mt-3 flex items-start gap-2 rounded-lg p-3 text-sm`}>
-          <CheckCircle2 className="w-4 h-4 mt-0.5" />
-          <div><div>Comissão: <strong>{testResult.commission_pct}%</strong> · Taxa fixa: <strong>R$ {testResult.fixed_fee ?? 0}</strong></div><div className="text-xs mt-1">Origem: {testResult.source === 'cache' ? 'cache' : 'consulta ao vivo'} · {testResult.exact ? 'logística informada' : 'cálculo parcial'}</div>{testResult.warning && <div className="text-xs mt-1">{testResult.warning}</div>}</div>
-        </div>}
-      </div>}
+      {accounts.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center">
+          <Store className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+          <div className="font-medium text-gray-900">Nenhuma conta cadastrada</div>
+          <p className="mt-1 text-sm text-gray-500">Cadastre as contas antes de associar produtos aos marketplaces.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {accounts.map((account) => {
+            const platform = platformById.get(account.platform_id)
+            const issue = accountIssue(account, platform?.name)
+            return (
+              <div key={account.id} className="rounded-xl bg-white shadow-md border border-gray-100 p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center">
+                      <Store className="w-5 h-5 text-slate-600" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-gray-900">{account.name}</h3>
+                      <p className="text-sm text-gray-500">
+                        {platform?.name || 'Marketplace'}
+                        {account.document_type ? ` · ${account.document_type.toUpperCase()}` : ''}
+                      </p>
+                    </div>
+                  </div>
+                  {canManage && (
+                    <button onClick={() => editAccount(account)} className="text-sm text-blue-600 hover:underline">Editar</button>
+                  )}
+                </div>
 
-      <div className="text-xs text-gray-400">Amazon (SP-API), Shopee, Magalu e TikTok Shop ainda não têm integração de API ativa.</div>
+                <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                  {account.is_default && <span className="rounded-full bg-blue-100 px-2 py-1 text-blue-700">Padrão</span>}
+                  {issue ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-700">
+                      <AlertCircle className="w-3 h-3" /> Configuração pendente
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-1 text-green-700">
+                      <CheckCircle2 className="w-3 h-3" /> Perfil configurado
+                    </span>
+                  )}
+                </div>
+
+                {issue && <p className="mt-3 text-xs text-amber-700">{issue}</p>}
+
+                {platform?.name === SHOPEE && account.document_type === 'cpf' && !issue && (
+                  <p className="mt-3 text-xs text-gray-500">
+                    Faixa CPF: {account.profile_config?.shopee_cpf_order_band === 'over_450' ? 'mais de 450 pedidos/90 dias (+ R$3 por item)' : 'até 450 pedidos/90 dias'}.
+                  </p>
+                )}
+                {platform?.name === TIKTOK && !issue && (
+                  <p className="mt-3 text-xs text-gray-500">
+                    Programa de Taxas de Envio: {account.profile_config?.tiktok_shipping_fee_program === 'enrolled' ? 'participa (6%, teto R$50)' : 'opt-out / não participa'}.
+                  </p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
