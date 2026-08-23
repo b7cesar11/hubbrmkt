@@ -99,7 +99,7 @@ describe('calculateRuleCharges', () => {
 })
 
 describe('computeMargin com cobranças condicionais', () => {
-  it('desconta programa TikTok separado dos custos operacionais', () => {
+  it('desconta programa TikTok e mantém a camada operacional separada', () => {
     const product = { id: 'p1', category: 'utilidades', cost_price: 40 }
     const listing = {
       id: 'l1',
@@ -121,6 +121,8 @@ describe('computeMargin com cobranças condicionais', () => {
     // 100 - 40 - 6% comissão - R$6 fixo - 6% programa = 42
     expect(result.netMargin).toBe(42)
     expect(result.platformChargesTotal).toBe(6)
-    expect(result.additionalCostsTotal).toBe(0)
+    expect(result.operationalCostsTotal).toBe(0)
+    expect(result.additionalCostsTotal).toBe(6)
+    expect(result.appliedCosts[0].kind).toBe('platform')
   })
 })
