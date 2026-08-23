@@ -1,12 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
+import { attachExactLiveFees } from '../lib/liveFeeCache'
 
 /**
  * Hook que carrega e gerencia todos os dados do Supabase
  * necessários para o dashboard.
- *
- * @param {object} user - Usuário autenticado do Supabase
- * @returns {object} dados + loading + erro + função reload
  */
 export function useDashboardData(user) {
   const [products, setProducts] = useState([])
@@ -18,6 +16,7 @@ export function useDashboardData(user) {
   const [promotions, setPromotions] = useState([])
   const [companyUsers, setCompanyUsers] = useState([])
   const [coverageGaps, setCoverageGaps] = useState([])
+  const [liveFeeCache, setLiveFeeCache] = useState([])
   const [companyId, setCompanyId] = useState(null)
   const [userRole, setUserRole] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -28,8 +27,6 @@ export function useDashboardData(user) {
     setLoading(true)
     setError(null)
     try {
-      // Busca o company_id real do usuário logado — sem isso, o cadastro de
-      // produto é bloqueado pela política de RLS (que exige company_id correto).
       const { data: userRow, error: userError } = await supabase
         .from('users')
         .select('company_id, role')
@@ -57,8 +54,9 @@ export function useDashboardData(user) {
         listingCostComponentsRes,
         gapsRes,
         promotionsRes,
+        liveFeesRes,
       ] = await Promise.all([
-        supabase.from('products').select('*'), // busca todos — filtro de status é feito na tela, não na query
+        supabase.from('products').select('*'),
         supabase.from('platforms').select('*'),
         supabase.from('platform_fee_rules').select('*'),
         supabase.from('product_listings').select('*'),
@@ -66,6 +64,12 @@ export function useDashboardData(user) {
         supabase.from('listing_cost_components').select('*'),
         supabase.from('category_coverage_gaps').select('*').eq('status', 'pending_validation'),
         supabase.from('platform_promotions').select('*'),
+        supabase
+          .from('live_fee_cache')
+          .select(
+            'id, platform_id, category_id, listing_type, price, commission_pct, fixed_fee, fetched_at, expires_at, logistic_type, shipping_mode, billable_weight_kg, is_exact, confidence_status, warning'
+          )
+          .gt('expires_at', new Date().toISOString()),
       ])
 
       if (productsRes.error) throw productsRes.error
@@ -76,25 +80,34 @@ export function useDashboardData(user) {
       if (listingCostComponentsRes.error) throw listingCostComponentsRes.error
       if (gapsRes.error) throw gapsRes.error
       if (promotionsRes.error) throw promotionsRes.error
+      if (liveFeesRes.error) throw liveFeesRes.error
 
+      const liveFees = liveFeesRes.data || []
       setProducts(productsRes.data || [])
       setPlatforms(platformsRes.data || [])
       setFeeRules(rulesRes.data || [])
-      setListings(listingsRes.data || [])
+      setListings(attachExactLiveFees(listingsRes.data || [], liveFees))
       setCoverageGaps(gapsRes.data || [])
       setCostComponents(costComponentsRes.data || [])
       setListingCostComponents(listingCostComponentsRes.data || [])
       setPromotions(promotionsRes.data || [])
+      setLiveFeeCache(liveFees)
     } catch (err) {
       console.error('Erro ao carregar dados:', err)
       setError(err.message)
     } finally {
       setLoading(false)
     }
-  }, [user?.id])
+  }, [user])
 
   useEffect(() => {
     loadData()
+  }, [loadData])
+
+  useEffect(() => {
+    const reloadFromMutation = () => loadData()
+    window.addEventListener('margemhub:data-changed', reloadFromMutation)
+    return () => window.removeEventListener('margemhub:data-changed', reloadFromMutation)
   }, [loadData])
 
   return {
@@ -115,6 +128,7 @@ export function useDashboardData(user) {
     setCompanyUsers,
     coverageGaps,
     setCoverageGaps,
+    liveFeeCache,
     companyId,
     userRole,
     loading,
