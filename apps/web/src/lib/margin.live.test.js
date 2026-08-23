@@ -27,8 +27,8 @@ function deps(listing, extra = {}) {
   }
 }
 
-describe('computeMargin com taxa live', () => {
-  it('consome live_fee_override exata anexada ao listing', () => {
+describe('computeMargin e integrações live', () => {
+  it('não promove live_fee_override do cache automaticamente para o cálculo', () => {
     const listing = {
       id: 'l1',
       product_id: 'p1',
@@ -44,15 +44,16 @@ describe('computeMargin com taxa live', () => {
       },
     }
     const result = computeMargin(product, 'ml', deps(listing))
-    expect(result.calculationMode).toBe('api_live_or_cache')
-    expect(result.commission).toBe(13)
-    expect(result.fixedFee).toBe(8)
-    expect(result.netMargin).toBe(29)
+    expect(result.calculationMode).toBe('official_rule')
+    expect(result.commission).toBe(10)
+    expect(result.fixedFee).toBe(5)
+    expect(result.netMargin).toBe(35)
   })
 
-  it('identifica consulta explícita parcial na prévia sem fingir exatidão', () => {
+  it('só usa consulta live quando ativada explicitamente para diagnóstico', () => {
     const listing = { id: 'l1', product_id: 'p1', platform_id: 'ml', sale_price: 100, listing_type: null }
     const result = computeMargin(product, 'ml', deps(listing, {
+      allowLiveFee: true,
       liveFee: {
         commission_pct: 12,
         fixed_fee: 7,
@@ -62,7 +63,7 @@ describe('computeMargin com taxa live', () => {
         warning: 'Logística incompleta',
       },
     }))
-    expect(result.calculationMode).toBe('api_partial')
+    expect(result.calculationMode).toBe('api_diagnostic')
     expect(result.rule.warning).toBe('Logística incompleta')
   })
 })
