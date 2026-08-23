@@ -355,7 +355,7 @@ export function ProductForm({
         <div>
           <h3 className="text-sm font-semibold text-gray-700 mb-1">Presença por plataforma</h3>
           <p className="text-xs text-gray-500 mb-3">
-            A prévia usa o mesmo motor da visão operacional. Programas condicionais só entram no cálculo quando seu status está definido.
+            A prévia usa o mesmo motor da visão operacional. Programas condicionais são provisionados conforme a política e podem ser confirmados por anúncio.
           </p>
 
           <div className="space-y-3">
@@ -524,7 +524,7 @@ export function ProductForm({
                         <option value="opted_out">Opt-out / não participa</option>
                       </select>
                       <p className="mt-2 text-xs text-gray-500">
-                        Quando participa, o motor aplica 6% sobre o preço de venda, limitado a R$ 50 por produto. Se o status estiver desconhecido, o custo não é presumido e a margem mostra um alerta.
+                        A plataforma informa inclusão automática por padrão. Em “não sei”, o motor provisiona 6% sobre o preço de venda, limitado a R$ 50 por produto, e mantém um alerta até a confirmação. Opt-out remove essa cobrança.
                       </p>
                     </div>
                   )}
