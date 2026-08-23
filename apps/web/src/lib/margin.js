@@ -16,14 +16,18 @@ export function localDateKey(date = new Date()) {
 }
 
 function normalizeText(value) {
-  return value == null ? null : String(value).trim().toLocaleLowerCase('pt-BR')
+  if (value == null) return null
+  return String(value)
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('pt-BR')
 }
 
 function ruleSpecificity(rule, category, listingType) {
   let score = 0
   if (rule.category !== null) score += normalizeText(rule.category) === normalizeText(category) ? 4 : -100
   if (rule.listing_type !== null) score += normalizeText(rule.listing_type) === normalizeText(listingType) ? 2 : -100
-  if (rule.reputation_level && rule.reputation_level !== 'padrao') score += 1
   return score
 }
 
@@ -119,9 +123,10 @@ export function computeMargin(product, platformId, deps) {
   const listing = getListing(product.id, platformId, listings)
   if (!listing) return { status: 'sem_preco' }
 
+  const category = listing.platform_category_name || product.category
   const staticRule = findApplicableRule(
     platformId,
-    listing.platform_category_name || product.category,
+    category,
     Number(listing.sale_price),
     listing.listing_type,
     feeRules,
@@ -131,13 +136,15 @@ export function computeMargin(product, platformId, deps) {
   const hasLiveFee = liveFee && Number.isFinite(Number(liveFee.commission_pct))
   const rule = hasLiveFee
     ? {
-        ...staticRule,
+        ...(staticRule || {}),
         commission_pct: Number(liveFee.commission_pct),
         fixed_fee: Number(liveFee.fixed_fee || 0),
         source_kind: 'api',
-        confidence_status: 'account_specific',
+        confidence_status: liveFee.confidence || 'account_specific',
         live_fee_source: liveFee.source,
         fetched_at: liveFee.fetched_at,
+        exact: liveFee.exact ?? null,
+        warning: liveFee.warning ?? null,
       }
     : staticRule
 
@@ -147,12 +154,7 @@ export function computeMargin(product, platformId, deps) {
   const commission = (salePrice * Number(rule.commission_pct || 0)) / 100
   const fixedFee = Number(rule.fixed_fee || 0)
 
-  const applicablePromotions = getApplicablePromotions(
-    platformId,
-    listing.platform_category_name || product.category,
-    promotions,
-    asOf,
-  )
+  const applicablePromotions = getApplicablePromotions(platformId, category, promotions, asOf)
   const promoBenefits = []
   let commissionExemptionRemaining = commission
 
