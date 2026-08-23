@@ -79,7 +79,7 @@ export function getApplicablePromotions(platformId, category, promotions, asOf =
 }
 
 export function getCalculationBasisAmount(component, listing) {
-  const basis = component.calculation_basis || 'sale_price'
+  const basis = component.calculation_basis || component.basis || 'sale_price'
   const candidates = {
     sale_price: listing.sale_price,
     seller_discount_price: listing.seller_discount_price,
@@ -103,6 +103,83 @@ export function calculateCostComponent(component, value, listing) {
   if (component.min_amount != null) amount = Math.max(amount, Number(component.min_amount))
   if (component.cap_amount != null) amount = Math.min(amount, Number(component.cap_amount))
   return amount
+}
+
+function evaluateRuleChargeCondition(charge, listing) {
+  const condition = charge?.condition
+  if (!condition) return { applies: true, warning: null }
+
+  if (condition.program_key) {
+    const value = listing.program_config?.[condition.program_key] ?? 'unknown'
+    if (value === condition.equals) return { applies: true, warning: null }
+    if (value === 'unknown' || value == null) {
+      return { applies: false, warning: charge.unknown_message || null }
+    }
+    return { applies: false, warning: null }
+  }
+
+  return { applies: false, warning: null }
+}
+
+/**
+ * Interpreta fórmulas declaradas em platform_fee_rules.calculation_config.
+ * O motor é deliberadamente pequeno e declarativo: nenhuma plataforma é
+ * reconhecida por nome aqui.
+ */
+export function calculateRuleCharges(rule, listing) {
+  const config = rule?.calculation_config || {}
+  const salePrice = Number(listing.sale_price || 0)
+  let fixedFee = Number(rule?.fixed_fee || 0)
+  let fixedFeeLabel = null
+  const charges = []
+  const warnings = []
+
+  const fixedOverride = config.fixed_fee_override
+  if (
+    fixedOverride?.type === 'percentage_of_sale_price_below' &&
+    Number.isFinite(Number(fixedOverride.threshold)) &&
+    salePrice < Number(fixedOverride.threshold)
+  ) {
+    fixedFee = (salePrice * Number(fixedOverride.percentage || 0)) / 100
+    fixedFeeLabel = fixedOverride.name || null
+  }
+
+  for (const charge of config.additional_charges || []) {
+    const condition = evaluateRuleChargeCondition(charge, listing)
+    if (condition.warning) warnings.push(condition.warning)
+    if (!condition.applies) continue
+
+    const amount = calculateCostComponent(
+      {
+        calc_type: charge.calc_type,
+        basis: charge.basis || 'sale_price',
+        min_amount: charge.min_amount,
+        cap_amount: charge.cap_amount,
+      },
+      charge.value,
+      listing,
+    )
+
+    if (amount <= 0) continue
+    charges.push({
+      code: charge.code || null,
+      name: charge.name || 'Cobrança adicional da plataforma',
+      amount,
+      calcType: charge.calc_type,
+      value: Number(charge.value || 0),
+      calculationBasis: charge.basis || 'sale_price',
+      capAmount: charge.cap_amount ?? null,
+      minAmount: charge.min_amount ?? null,
+    })
+  }
+
+  return {
+    fixedFee,
+    fixedFeeLabel,
+    charges,
+    chargesTotal: charges.reduce((sum, charge) => sum + charge.amount, 0),
+    warnings,
+  }
 }
 
 /**
@@ -155,7 +232,8 @@ export function computeMargin(product, platformId, deps) {
 
   const salePrice = Number(listing.sale_price)
   const commission = (salePrice * Number(rule.commission_pct || 0)) / 100
-  const fixedFee = Number(rule.fixed_fee || 0)
+  const ruleCharges = calculateRuleCharges(rule, listing)
+  const fixedFee = ruleCharges.fixedFee
 
   const applicablePromotions = getApplicablePromotions(platformId, category, promotions, asOf)
   const promoBenefits = []
@@ -206,7 +284,14 @@ export function computeMargin(product, platformId, deps) {
 
   const additionalCostsTotal = appliedCosts.reduce((sum, c) => sum + c.amount, 0)
   const costPrice = Number(product.cost_price || 0)
-  const netMargin = salePrice - costPrice - commission - fixedFee - additionalCostsTotal + promoBenefitsTotal
+  const netMargin =
+    salePrice -
+    costPrice -
+    commission -
+    fixedFee -
+    ruleCharges.chargesTotal -
+    additionalCostsTotal +
+    promoBenefitsTotal
   const marginPct = salePrice > 0 ? (netMargin / salePrice) * 100 : 0
 
   return {
@@ -219,6 +304,10 @@ export function computeMargin(product, platformId, deps) {
     salePrice,
     commission,
     fixedFee,
+    fixedFeeLabel: ruleCharges.fixedFeeLabel,
+    platformCharges: ruleCharges.charges,
+    platformChargesTotal: ruleCharges.chargesTotal,
+    calculationWarnings: [rule.warning, ...ruleCharges.warnings].filter(Boolean),
     appliedCosts,
     additionalCostsTotal,
     promoBenefits,
