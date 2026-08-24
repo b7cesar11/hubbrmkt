@@ -101,6 +101,37 @@ describe('findApplicableRule com taxonomia hierárquica', () => {
       ),
     ).toBeUndefined()
   })
+
+  it('uma subcategoria específica vence uma regra de conta no ancestral', () => {
+    const selected = findApplicableRule(
+      'platform-1',
+      'Cadeiras',
+      100,
+      null,
+      [
+        rule({
+          id: 'parent-cnpj',
+          marketplace_category_id: 'office',
+          category_scope: 'descendants',
+          account_type: 'cnpj',
+          commission_pct: 18,
+        }),
+        rule({
+          id: 'child-generic',
+          marketplace_category_id: 'chairs',
+          category_scope: 'exact',
+          commission_pct: 12,
+        }),
+      ],
+      TODAY,
+      'cnpj',
+      'chairs',
+      path,
+    )
+
+    expect(selected.id).toBe('child-generic')
+    expect(selected.commission_pct).toBe(12)
+  })
 })
 
 describe('computeMargin com categoria oficial', () => {
