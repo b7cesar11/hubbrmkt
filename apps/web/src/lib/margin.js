@@ -58,12 +58,14 @@ function categoryRuleMatch(rule, category, marketplaceCategoryId, categoryPathId
         return { matches: false, specificity: -1000 }
       }
       const depth = pathIndex >= 0 ? pathIndex : path.length
-      return { matches: true, specificity: 200 + depth * 10 }
+      // A profundidade da taxonomia é a dimensão principal. Metadados como CPF/CNPJ
+      // apenas desempatarão regras da mesma categoria, nunca vencerão uma subcategoria.
+      return { matches: true, specificity: 2000 + depth * 100 }
     }
 
     if (ruleId !== selectedId) return { matches: false, specificity: -1000 }
     const depth = pathIndex >= 0 ? pathIndex : path.length
-    return { matches: true, specificity: 205 + depth * 10 }
+    return { matches: true, specificity: 2005 + depth * 100 }
   }
 
   if (rule.category !== null && rule.category !== undefined) {
