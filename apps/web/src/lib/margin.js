@@ -39,11 +39,55 @@ export function isOfficialFeeRule(rule) {
   return rule?.source_kind === 'official' && rule?.confidence_status === 'confirmed'
 }
 
-function ruleSpecificity(rule, category, listingType) {
-  let score = 0
-  if (rule.account_type !== null && rule.account_type !== undefined) score += 8
-  if (rule.category !== null) score += normalizeText(rule.category) === normalizeText(category) ? 4 : -100
-  if (rule.listing_type !== null) score += normalizeText(rule.listing_type) === normalizeText(listingType) ? 2 : -100
+function normalizedCategoryPathIds(categoryPathIds) {
+  return Array.isArray(categoryPathIds) ? categoryPathIds.filter(Boolean).map(String) : []
+}
+
+function categoryRuleMatch(rule, category, marketplaceCategoryId, categoryPathIds) {
+  if (rule.marketplace_category_id) {
+    if (!marketplaceCategoryId) return { matches: false, specificity: -1000 }
+
+    const ruleId = String(rule.marketplace_category_id)
+    const selectedId = String(marketplaceCategoryId)
+    const path = normalizedCategoryPathIds(categoryPathIds)
+    const pathIndex = path.indexOf(ruleId)
+    const scope = rule.category_scope || 'exact'
+
+    if (scope === 'descendants') {
+      if (pathIndex < 0 && ruleId !== selectedId) {
+        return { matches: false, specificity: -1000 }
+      }
+      const depth = pathIndex >= 0 ? pathIndex : path.length
+      return { matches: true, specificity: 200 + depth * 10 }
+    }
+
+    if (ruleId !== selectedId) return { matches: false, specificity: -1000 }
+    const depth = pathIndex >= 0 ? pathIndex : path.length
+    return { matches: true, specificity: 205 + depth * 10 }
+  }
+
+  if (rule.category !== null && rule.category !== undefined) {
+    const matches = normalizeText(rule.category) === normalizeText(category)
+    return { matches, specificity: matches ? 40 : -1000 }
+  }
+
+  return { matches: true, specificity: 0 }
+}
+
+function ruleSpecificity(rule, category, listingType, marketplaceCategoryId, categoryPathIds) {
+  const categoryMatch = categoryRuleMatch(
+    rule,
+    category,
+    marketplaceCategoryId,
+    categoryPathIds
+  )
+  if (!categoryMatch.matches) return -1000
+
+  let score = categoryMatch.specificity
+  if (rule.account_type !== null && rule.account_type !== undefined) score += 20
+  if (rule.listing_type !== null) {
+    score += normalizeText(rule.listing_type) === normalizeText(listingType) ? 5 : -1000
+  }
   return score
 }
 
@@ -55,6 +99,8 @@ export function findApplicableRule(
   feeRules,
   asOf = new Date(),
   accountType = null,
+  marketplaceCategoryId = null,
+  categoryPathIds = [],
 ) {
   const today = typeof asOf === 'string' ? asOf : localDateKey(asOf)
 
@@ -62,7 +108,7 @@ export function findApplicableRule(
     .filter((rule) => {
       if (rule.platform_id !== platformId) return false
       if (rule.account_type != null && normalizeText(rule.account_type) !== normalizeText(accountType)) return false
-      if (rule.category !== null && normalizeText(rule.category) !== normalizeText(category)) return false
+      if (!categoryRuleMatch(rule, category, marketplaceCategoryId, categoryPathIds).matches) return false
       if (rule.listing_type !== null && normalizeText(rule.listing_type) !== normalizeText(listingType)) return false
       if (rule.valid_from && today < rule.valid_from) return false
       if (rule.valid_to && today > rule.valid_to) return false
@@ -74,7 +120,9 @@ export function findApplicableRule(
       return true
     })
     .sort((a, b) => {
-      const specificity = ruleSpecificity(b, category, listingType) - ruleSpecificity(a, category, listingType)
+      const specificity =
+        ruleSpecificity(b, category, listingType, marketplaceCategoryId, categoryPathIds) -
+        ruleSpecificity(a, category, listingType, marketplaceCategoryId, categoryPathIds)
       if (specificity !== 0) return specificity
       const validFrom = String(b.valid_from || '').localeCompare(String(a.valid_from || ''))
       if (validFrom !== 0) return validFrom
@@ -261,7 +309,8 @@ export function computeMargin(product, platformId, deps) {
     },
   }
 
-  const category = listing.platform_category_name || product.category
+  const category =
+    listing.marketplace_category_name || listing.platform_category_name || product.category
   const officialRules = feeRules.filter(isOfficialFeeRule)
   const staticRule = findApplicableRule(
     platformId,
@@ -271,6 +320,8 @@ export function computeMargin(product, platformId, deps) {
     officialRules,
     asOf,
     accountType,
+    listing.marketplace_category_ref_id || null,
+    listing.marketplace_category_path_ids || [],
   )
 
   // Integrações não fazem parte do fluxo comercial atual. Este caminho fica apenas
@@ -295,12 +346,20 @@ export function computeMargin(product, platformId, deps) {
   if (!rule) {
     const platformOfficialRules = officialRules.filter((candidate) => candidate.platform_id === platformId)
     const requiresAccountType = platformOfficialRules.some((candidate) => candidate.account_type != null)
+    const hasTaxonomyRules = platformOfficialRules.some((candidate) => candidate.marketplace_category_id != null)
+
+    let reason = 'Não há uma regra oficial confirmada aplicável a este anúncio.'
+    if (requiresAccountType && !accountType) {
+      reason = 'Complete o tipo da conta (CPF/CNPJ) antes de calcular.'
+    } else if (hasTaxonomyRules && !listing.marketplace_category_ref_id) {
+      reason = 'Selecione a categoria oficial do marketplace para aplicar a tarifa correta.'
+    } else if (hasTaxonomyRules && listing.marketplace_category_ref_id) {
+      reason = 'Não há uma tarifa oficial confirmada para a categoria selecionada e este contexto de anúncio.'
+    }
+
     return {
       status: 'sem_regra',
-      reason:
-        requiresAccountType && !accountType
-          ? 'Complete o tipo da conta (CPF/CNPJ) antes de calcular.'
-          : 'Não há uma regra oficial confirmada aplicável a este anúncio.',
+      reason,
       officialOnly: true,
     }
   }
@@ -396,6 +455,14 @@ export function computeMargin(product, platformId, deps) {
     marginPct,
     rule,
     marketplaceAccount: account,
+    marketplaceCategory: listing.marketplace_category_ref_id
+      ? {
+          id: listing.marketplace_category_ref_id,
+          name: listing.marketplace_category_name || null,
+          path: listing.marketplace_category_path || null,
+          pathIds: listing.marketplace_category_path_ids || [],
+        }
+      : null,
     officialOnly: !hasLiveFee,
   }
 }
