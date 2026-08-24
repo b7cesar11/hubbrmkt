@@ -143,8 +143,11 @@ export function getApplicablePromotions(platformId, category, promotions, asOf =
 
 export function getCalculationBasisAmount(component, listing) {
   const basis = component.calculation_basis || component.basis || 'sale_price'
+  const salePrice = Number(listing.sale_price || 0)
+  const shippingRevenue = Number(listing.shipping_revenue || 0)
   const candidates = {
-    sale_price: listing.sale_price,
+    sale_price: salePrice,
+    sale_price_plus_shipping_revenue: salePrice + shippingRevenue,
     seller_discount_price: listing.seller_discount_price,
     actual_paid: listing.actual_paid_amount,
     affiliate_base: listing.affiliate_commission_base,
@@ -152,7 +155,7 @@ export function getCalculationBasisAmount(component, listing) {
     shipping_amount: listing.shipping_amount,
   }
   const selected = Number(candidates[basis])
-  return Number.isFinite(selected) ? selected : Number(listing.sale_price) || 0
+  return Number.isFinite(selected) ? selected : salePrice
 }
 
 export function calculateCostComponent(component, value, listing) {
@@ -166,6 +169,77 @@ export function calculateCostComponent(component, value, listing) {
   if (component.min_amount != null) amount = Math.max(amount, Number(component.min_amount))
   if (component.cap_amount != null) amount = Math.min(amount, Number(component.cap_amount))
   return amount
+}
+
+/**
+ * Calcula a comissão principal declarada pela regra.
+ * Suporta base de cálculo diferente do preço do item, comissão mínima e
+ * faixas progressivas sem espalhar lógica específica de marketplace pelo app.
+ */
+export function calculateCommission(rule, listing) {
+  const config = rule?.calculation_config || {}
+  const basisAmount = getCalculationBasisAmount(
+    { calculation_basis: config.commission_basis || 'sale_price' },
+    listing,
+  )
+  const progressive = config.progressive_commission || null
+  const breakdown = []
+  let amount = 0
+
+  if (
+    progressive &&
+    Number.isFinite(Number(progressive.threshold)) &&
+    Number.isFinite(Number(progressive.base_pct)) &&
+    Number.isFinite(Number(progressive.excess_pct))
+  ) {
+    const threshold = Math.max(0, Number(progressive.threshold))
+    const baseAmount = Math.min(basisAmount, threshold)
+    const excessAmount = Math.max(0, basisAmount - threshold)
+    const baseCommission = (baseAmount * Number(progressive.base_pct)) / 100
+    const excessCommission = (excessAmount * Number(progressive.excess_pct)) / 100
+    amount = baseCommission + excessCommission
+
+    if (baseAmount > 0) {
+      breakdown.push({
+        label: `Até R$ ${threshold.toFixed(2)}`,
+        basisAmount: baseAmount,
+        pct: Number(progressive.base_pct),
+        amount: baseCommission,
+      })
+    }
+    if (excessAmount > 0) {
+      breakdown.push({
+        label: `Excedente acima de R$ ${threshold.toFixed(2)}`,
+        basisAmount: excessAmount,
+        pct: Number(progressive.excess_pct),
+        amount: excessCommission,
+      })
+    }
+  } else {
+    const pct = Number(rule?.commission_pct || 0)
+    amount = (basisAmount * pct) / 100
+    if (basisAmount > 0) {
+      breakdown.push({
+        label: 'Comissão percentual',
+        basisAmount,
+        pct,
+        amount,
+      })
+    }
+  }
+
+  const minimumCommission = Number(config.minimum_commission)
+  const minimumApplied = Number.isFinite(minimumCommission) && minimumCommission > 0 && amount < minimumCommission
+  if (minimumApplied) amount = minimumCommission
+
+  return {
+    amount,
+    basisAmount,
+    effectivePct: basisAmount > 0 ? (amount / basisAmount) * 100 : 0,
+    minimumCommission: Number.isFinite(minimumCommission) ? minimumCommission : null,
+    minimumApplied,
+    breakdown,
+  }
 }
 
 function evaluateRuleChargeCondition(charge, listing) {
@@ -371,8 +445,20 @@ export function computeMargin(product, platformId, deps) {
     if (contextIssue) return { ...contextIssue, officialOnly: true, rule }
   }
 
-  const salePrice = Number(listing.sale_price)
-  const commission = (salePrice * Number(rule.commission_pct || 0)) / 100
+  const salePrice = Number(listing.sale_price || 0)
+  const shippingRevenue = Number(listing.shipping_revenue || 0)
+  const grossRevenue = salePrice + shippingRevenue
+  const commissionResult = hasLiveFee
+    ? {
+        amount: (salePrice * Number(rule.commission_pct || 0)) / 100,
+        basisAmount: salePrice,
+        effectivePct: Number(rule.commission_pct || 0),
+        minimumCommission: null,
+        minimumApplied: false,
+        breakdown: [],
+      }
+    : calculateCommission(rule, effectiveListing)
+  const commission = commissionResult.amount
   const ruleCharges = calculateRuleCharges(rule, effectiveListing)
   const fixedFee = ruleCharges.fixedFee
 
@@ -429,19 +515,26 @@ export function computeMargin(product, platformId, deps) {
   const additionalCostsTotal = ruleCharges.chargesTotal + operationalCostsTotal
   const costPrice = Number(product.cost_price || 0)
   const netMargin =
-    salePrice -
+    grossRevenue -
     costPrice -
     commission -
     fixedFee -
     additionalCostsTotal +
     promoBenefitsTotal
-  const marginPct = salePrice > 0 ? (netMargin / salePrice) * 100 : 0
+  const marginPct = grossRevenue > 0 ? (netMargin / grossRevenue) * 100 : 0
 
   return {
     status: 'ok',
     calculationMode: hasLiveFee ? 'api_diagnostic' : 'official_rule',
     salePrice,
+    shippingRevenue,
+    grossRevenue,
     commission,
+    commissionBasisAmount: commissionResult.basisAmount,
+    commissionEffectivePct: commissionResult.effectivePct,
+    commissionMinimum: commissionResult.minimumCommission,
+    commissionMinimumApplied: commissionResult.minimumApplied,
+    commissionBreakdown: commissionResult.breakdown,
     fixedFee,
     fixedFeeLabel: ruleCharges.fixedFeeLabel,
     platformCharges: ruleCharges.charges,
