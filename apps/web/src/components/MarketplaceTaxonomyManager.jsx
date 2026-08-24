@@ -86,19 +86,30 @@ export function MarketplaceTaxonomyManager({ platforms }) {
     setError(null)
   }
 
-  function startEdit(category) {
+  async function startEdit(category) {
+    setError(null)
+    const { data, error: fetchError } = await supabase
+      .from('marketplace_categories')
+      .select('id, parent_id, canonical_key, external_category_id, name, is_leaf, source_url')
+      .eq('id', category.id)
+      .single()
+
+    if (fetchError || !data) {
+      setError(fetchError?.message || 'Não foi possível carregar os dados completos da categoria.')
+      return
+    }
+
     setForm({
-      id: category.id,
-      parent_id: category.parent_id || null,
+      id: data.id,
+      parent_id: data.parent_id || null,
       parent_snapshot: null,
-      canonical_key: category.canonical_key || '',
-      external_category_id: category.external_category_id || '',
-      name: category.name || '',
-      is_leaf: Boolean(category.is_leaf),
-      source_url: category.source_url || '',
+      canonical_key: data.canonical_key || slugify(data.name),
+      external_category_id: data.external_category_id || '',
+      name: data.name || '',
+      is_leaf: Boolean(data.is_leaf),
+      source_url: data.source_url || '',
     })
     setShowForm(true)
-    setError(null)
   }
 
   async function saveCategory(event) {
