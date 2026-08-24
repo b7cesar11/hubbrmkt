@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { computeMargin, getListing } from '../../lib/margin'
 import { getPricingRecommendations } from '../../lib/pricing'
+import { AccountComparisonPanel } from '../AccountComparisonPanel'
 
 function money(value) {
   return Number(value || 0).toLocaleString('pt-BR', {
@@ -53,7 +54,7 @@ export function SimuladorTab({
       <div className="mb-4">
         <h2 className="text-xl font-semibold text-gray-900">Simulador de Rentabilidade</h2>
         <p className="mt-1 text-sm text-gray-500">
-          Descubra preço mínimo, preço para margem alvo e impacto de comissões extras sem alterar dados reais.
+          Descubra preço mínimo, preço para margem alvo e compare a rentabilidade de cada conta/canal.
         </p>
       </div>
 
@@ -82,7 +83,7 @@ export function SimuladorTab({
             disabled={!simProduct}
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100"
           >
-            <option value="">Selecione a plataforma...</option>
+            <option value="">Selecione uma plataforma para detalhar...</option>
             {productPlatformOptions.map((pl) => (
               <option key={pl.id} value={pl.id}>
                 {pl.name}
@@ -97,6 +98,12 @@ export function SimuladorTab({
           </p>
         )}
 
+        {simProduct && !simPlatformId && productPlatformOptions.length > 0 && (
+          <div className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
+            A comparação de todas as contas aparece abaixo. Selecione uma plataforma para abrir também o detalhamento de precificação e cenários.
+          </div>
+        )}
+
         {baseMargin?.status === 'ok' && (
           <>
             <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -108,7 +115,7 @@ export function SimuladorTab({
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
                     {money(baseMargin.netMargin)} por venda
-                    {accountName ? ` · conta ${accountName}` : ''}
+                    {accountName ? ` · conta padrão ${accountName}` : ''}
                   </div>
                 </div>
                 <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
@@ -270,6 +277,13 @@ export function SimuladorTab({
           </p>
         )}
       </div>
+
+      <AccountComparisonPanel
+        product={simProduct}
+        platforms={platforms}
+        getMarginDeps={getMarginDeps}
+        targetMarginPct={targetMarginPct}
+      />
     </div>
   )
 }
