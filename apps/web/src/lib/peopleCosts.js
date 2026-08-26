@@ -36,10 +36,13 @@ export function getPersonAllocationUnits(person, listings = [], productPeople = 
 }
 
 /**
- * Converte pessoas em artefatos compatíveis com o motor atual de custos.
- * A pessoa continua sendo a única fonte da verdade; estes componentes existem
- * apenas em memória para que comissão e rateio fixo participem de margem,
- * comparação e precificação sem duplicar registros em cost_components.
+ * Gera custos derivados de pessoas somente em memória. Eles nunca são persistidos
+ * em cost_components/listing_cost_components, evitando duas fontes da verdade.
+ *
+ * `listingPeopleCosts` é a representação preferencial para o motor de margem:
+ * cada listing recebe sua lista privada de custos de pessoas. Os arrays legados
+ * `costComponents`/`listingCostComponents` permanecem no retorno apenas para
+ * testes/consumidores internos e não devem ser usados como registros editáveis.
  */
 export function buildPeopleCostArtifacts({
   people = [],
@@ -49,6 +52,7 @@ export function buildPeopleCostArtifacts({
 } = {}) {
   const costComponents = []
   const listingCostComponents = []
+  const listingPeopleCosts = []
   const allocationByPerson = new Map()
 
   for (const person of people.filter((candidate) => candidate.active !== false)) {
@@ -79,7 +83,7 @@ export function buildPeopleCostArtifacts({
 
     if (fixedMonthlyCost > 0) {
       const id = `person:${person.id}:fixed`
-      costComponents.push({
+      const component = {
         id,
         company_id: person.company_id,
         name: allocationPending
@@ -92,12 +96,14 @@ export function buildPeopleCostArtifacts({
         active: true,
         origin: 'person',
         person_id: person.id,
+        person_name: person.name,
         role_title: person.role_title,
         cost_part: 'fixed',
         fixed_monthly_cost: fixedMonthlyCost,
         allocation_units: allocationUnits,
         allocation_pending: allocationPending,
-      })
+      }
+      costComponents.push(component)
 
       for (const listing of applicableListings) {
         listingCostComponents.push({
@@ -108,12 +114,16 @@ export function buildPeopleCostArtifacts({
           origin: 'person',
           person_id: person.id,
         })
+        listingPeopleCosts.push({
+          product_listing_id: listing.id,
+          component,
+        })
       }
     }
 
     if (commissionPct > 0) {
       const id = `person:${person.id}:commission`
-      costComponents.push({
+      const component = {
         id,
         company_id: person.company_id,
         name: `${person.name} — comissão`,
@@ -127,10 +137,12 @@ export function buildPeopleCostArtifacts({
         active: true,
         origin: 'person',
         person_id: person.id,
+        person_name: person.name,
         role_title: person.role_title,
         cost_part: 'commission',
         commission_pct: commissionPct,
-      })
+      }
+      costComponents.push(component)
 
       for (const listing of applicableListings) {
         listingCostComponents.push({
@@ -141,9 +153,18 @@ export function buildPeopleCostArtifacts({
           origin: 'person',
           person_id: person.id,
         })
+        listingPeopleCosts.push({
+          product_listing_id: listing.id,
+          component,
+        })
       }
     }
   }
 
-  return { costComponents, listingCostComponents, allocationByPerson }
+  return {
+    costComponents,
+    listingCostComponents,
+    listingPeopleCosts,
+    allocationByPerson,
+  }
 }
