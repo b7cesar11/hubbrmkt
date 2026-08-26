@@ -38,11 +38,6 @@ export function getPersonAllocationUnits(person, listings = [], productPeople = 
 /**
  * Gera custos derivados de pessoas somente em memória. Eles nunca são persistidos
  * em cost_components/listing_cost_components, evitando duas fontes da verdade.
- *
- * `listingPeopleCosts` é a representação preferencial para o motor de margem:
- * cada listing recebe sua lista privada de custos de pessoas. Os arrays legados
- * `costComponents`/`listingCostComponents` permanecem no retorno apenas para
- * testes/consumidores internos e não devem ser usados como registros editáveis.
  */
 export function buildPeopleCostArtifacts({
   people = [],
@@ -93,7 +88,9 @@ export function buildPeopleCostArtifacts({
         calc_type: 'fixed',
         default_value: fixedPerUnit,
         calculation_basis: 'sale_price',
-        active: true,
+        // false esconde o artefato dos seletores de custos manuais. computeMargin
+        // aplica pelo vínculo derivado e não depende deste flag.
+        active: false,
         origin: 'person',
         person_id: person.id,
         person_name: person.name,
@@ -114,10 +111,7 @@ export function buildPeopleCostArtifacts({
           origin: 'person',
           person_id: person.id,
         })
-        listingPeopleCosts.push({
-          product_listing_id: listing.id,
-          component,
-        })
+        listingPeopleCosts.push({ product_listing_id: listing.id, component })
       }
     }
 
@@ -134,7 +128,7 @@ export function buildPeopleCostArtifacts({
           person.commission_basis === 'gross_revenue'
             ? 'sale_price_plus_shipping_revenue'
             : 'sale_price',
-        active: true,
+        active: false,
         origin: 'person',
         person_id: person.id,
         person_name: person.name,
@@ -153,18 +147,10 @@ export function buildPeopleCostArtifacts({
           origin: 'person',
           person_id: person.id,
         })
-        listingPeopleCosts.push({
-          product_listing_id: listing.id,
-          component,
-        })
+        listingPeopleCosts.push({ product_listing_id: listing.id, component })
       }
     }
   }
 
-  return {
-    costComponents,
-    listingCostComponents,
-    listingPeopleCosts,
-    allocationByPerson,
-  }
+  return { costComponents, listingCostComponents, listingPeopleCosts, allocationByPerson }
 }
