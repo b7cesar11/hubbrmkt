@@ -4,12 +4,8 @@ import { buildPeopleCostArtifacts } from '../lib/peopleCosts'
 
 /**
  * Hook que carrega e gerencia os dados operacionais do dashboard.
- * As margens são calculadas com regras oficiais; integrações live não são
- * promovidas automaticamente para o cálculo.
- *
- * Pessoas da operação não são duplicadas em cost_components. Os custos delas
- * são derivados em memória e anexados ao listing em `_people_costs`, campo
- * interno consumido apenas pelo motor financeiro.
+ * Pessoas da operação permanecem como fonte única no banco. Para o motor de
+ * margem, elas são convertidas em componentes derivados somente em memória.
  */
 export function useDashboardData(user) {
   const [products, setProducts] = useState([])
@@ -94,29 +90,20 @@ export function useDashboardData(user) {
       const productRows = productsRes.data || []
       const accounts = accountsRes.data || []
       const accountById = new Map(accounts.map((account) => [account.id, account]))
-      const baseListings = (listingsRes.data || []).map((listing) => ({
+      const enrichedListings = (listingsRes.data || []).map((listing) => ({
         ...listing,
         marketplace_account: accountById.get(listing.marketplace_account_id) || null,
       }))
       const peopleRows = peopleRes.data || []
       const productPeopleRows = productPeopleRes.data || []
+      const manualCostComponents = costComponentsRes.data || []
+      const manualListingCostComponents = listingCostComponentsRes.data || []
       const peopleArtifacts = buildPeopleCostArtifacts({
         people: peopleRows,
         productPeople: productPeopleRows,
-        listings: baseListings,
+        listings: enrichedListings,
         products: productRows,
       })
-      const peopleCostsByListing = new Map()
-      for (const row of peopleArtifacts.listingPeopleCosts) {
-        const key = String(row.product_listing_id)
-        const current = peopleCostsByListing.get(key) || []
-        current.push(row.component)
-        peopleCostsByListing.set(key, current)
-      }
-      const enrichedListings = baseListings.map((listing) => ({
-        ...listing,
-        _people_costs: peopleCostsByListing.get(String(listing.id)) || [],
-      }))
 
       setProducts(productRows)
       setPlatforms(platformsRes.data || [])
@@ -126,8 +113,11 @@ export function useDashboardData(user) {
       setCoverageGaps(gapsRes.data || [])
       setOperationPeople(peopleRows)
       setProductPeople(productPeopleRows)
-      setCostComponents(costComponentsRes.data || [])
-      setListingCostComponents(listingCostComponentsRes.data || [])
+      setCostComponents([...manualCostComponents, ...peopleArtifacts.costComponents])
+      setListingCostComponents([
+        ...manualListingCostComponents,
+        ...peopleArtifacts.listingCostComponents,
+      ])
       setPromotions(promotionsRes.data || [])
     } catch (err) {
       console.error('Erro ao carregar dados:', err)
