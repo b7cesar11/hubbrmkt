@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
+import { buildPeopleCostArtifacts } from '../lib/peopleCosts'
 
 /**
  * Hook que carrega e gerencia os dados operacionais do dashboard.
- * As margens são calculadas com regras oficiais; integrações live não são
- * promovidas automaticamente para o cálculo.
+ * Pessoas da operação permanecem como fonte única no banco. Para o motor de
+ * margem, elas são convertidas em componentes derivados somente em memória.
  */
 export function useDashboardData(user) {
   const [products, setProducts] = useState([])
@@ -14,6 +15,8 @@ export function useDashboardData(user) {
   const [listings, setListings] = useState([])
   const [costComponents, setCostComponents] = useState([])
   const [listingCostComponents, setListingCostComponents] = useState([])
+  const [operationPeople, setOperationPeople] = useState([])
+  const [productPeople, setProductPeople] = useState([])
   const [promotions, setPromotions] = useState([])
   const [companyUsers, setCompanyUsers] = useState([])
   const [coverageGaps, setCoverageGaps] = useState([])
@@ -54,6 +57,8 @@ export function useDashboardData(user) {
         listingsRes,
         costComponentsRes,
         listingCostComponentsRes,
+        peopleRes,
+        productPeopleRes,
         gapsRes,
         promotionsRes,
       ] = await Promise.all([
@@ -64,6 +69,8 @@ export function useDashboardData(user) {
         supabase.from('product_listings').select('*'),
         supabase.from('cost_components').select('*'),
         supabase.from('listing_cost_components').select('*'),
+        supabase.from('operation_people').select('*').order('name', { ascending: true }),
+        supabase.from('product_people').select('*'),
         supabase.from('category_coverage_gaps').select('*').eq('status', 'pending_validation'),
         supabase.from('platform_promotions').select('*'),
       ])
@@ -75,24 +82,42 @@ export function useDashboardData(user) {
       if (listingsRes.error) throw listingsRes.error
       if (costComponentsRes.error) throw costComponentsRes.error
       if (listingCostComponentsRes.error) throw listingCostComponentsRes.error
+      if (peopleRes.error) throw peopleRes.error
+      if (productPeopleRes.error) throw productPeopleRes.error
       if (gapsRes.error) throw gapsRes.error
       if (promotionsRes.error) throw promotionsRes.error
 
+      const productRows = productsRes.data || []
       const accounts = accountsRes.data || []
       const accountById = new Map(accounts.map((account) => [account.id, account]))
       const enrichedListings = (listingsRes.data || []).map((listing) => ({
         ...listing,
         marketplace_account: accountById.get(listing.marketplace_account_id) || null,
       }))
+      const peopleRows = peopleRes.data || []
+      const productPeopleRows = productPeopleRes.data || []
+      const manualCostComponents = costComponentsRes.data || []
+      const manualListingCostComponents = listingCostComponentsRes.data || []
+      const peopleArtifacts = buildPeopleCostArtifacts({
+        people: peopleRows,
+        productPeople: productPeopleRows,
+        listings: enrichedListings,
+        products: productRows,
+      })
 
-      setProducts(productsRes.data || [])
+      setProducts(productRows)
       setPlatforms(platformsRes.data || [])
       setMarketplaceAccounts(accounts)
       setFeeRules(rulesRes.data || [])
       setListings(enrichedListings)
       setCoverageGaps(gapsRes.data || [])
-      setCostComponents(costComponentsRes.data || [])
-      setListingCostComponents(listingCostComponentsRes.data || [])
+      setOperationPeople(peopleRows)
+      setProductPeople(productPeopleRows)
+      setCostComponents([...manualCostComponents, ...peopleArtifacts.costComponents])
+      setListingCostComponents([
+        ...manualListingCostComponents,
+        ...peopleArtifacts.listingCostComponents,
+      ])
       setPromotions(promotionsRes.data || [])
     } catch (err) {
       console.error('Erro ao carregar dados:', err)
@@ -126,6 +151,10 @@ export function useDashboardData(user) {
     setCostComponents,
     listingCostComponents,
     setListingCostComponents,
+    operationPeople,
+    setOperationPeople,
+    productPeople,
+    setProductPeople,
     promotions,
     setPromotions,
     companyUsers,
