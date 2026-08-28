@@ -76,44 +76,10 @@ export function buildPeopleCostArtifacts({
       applicableListingCount: applicableListings.length,
     })
 
-    if (fixedMonthlyCost > 0) {
-      const id = `person:${person.id}:fixed`
-      const component = {
-        id,
-        company_id: person.company_id,
-        name: allocationPending
-          ? `${person.name} — custo fixo pendente (informe vendas/mês)`
-          : `${person.name} — fixo rateado`,
-        category: 'people_cost',
-        calc_type: 'fixed',
-        default_value: fixedPerUnit,
-        calculation_basis: 'sale_price',
-        // false esconde o artefato dos seletores de custos manuais. computeMargin
-        // aplica pelo vínculo derivado e não depende deste flag.
-        active: false,
-        origin: 'person',
-        person_id: person.id,
-        person_name: person.name,
-        role_title: person.role_title,
-        cost_part: 'fixed',
-        fixed_monthly_cost: fixedMonthlyCost,
-        allocation_units: allocationUnits,
-        allocation_pending: allocationPending,
-      }
-      costComponents.push(component)
-
-      for (const listing of applicableListings) {
-        listingCostComponents.push({
-          id: `${id}:${listing.id}`,
-          product_listing_id: listing.id,
-          cost_component_id: id,
-          value_override: null,
-          origin: 'person',
-          person_id: person.id,
-        })
-        listingPeopleCosts.push({ product_listing_id: listing.id, component })
-      }
-    }
+    // Custos mensais não são custos por venda. Eles entram no motor de
+    // previsibilidade por SKU (break-even e meta saudável), sem depender de uma
+    // projeção digitada e sem distorcer a margem unitária. Aqui ficam somente
+    // os custos verdadeiramente variáveis, como comissão.
 
     if (commissionPct > 0) {
       const id = `person:${person.id}:commission`
