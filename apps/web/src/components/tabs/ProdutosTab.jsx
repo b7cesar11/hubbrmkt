@@ -1,10 +1,26 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import { ProductForm } from './ProductForm'
 import { Plus, Trash2, Pencil, Package, TrendingUp, AlertCircle } from 'lucide-react'
 import { computeMargin, getListing } from '../../lib/margin'
 import { supabase } from '../../lib/supabase'
+import { allocateMonthlyCostsByProduct, calculateProductPredictability } from '../../lib/predictability'
 
-export function ProdutosTab({ products, setProducts, platforms, feeRules, listings, costComponents, listingCostComponents, userRole, showNewProduct, setShowNewProduct, editingProductId, setEditingProductId, selectedPlatform, setSelectedPlatform, searchText, setSearchText, categoryFilter, setCategoryFilter, statusFilter, setStatusFilter, editRuleForm, setEditRuleForm, newProduct, setNewProduct, newListings, setNewListings, expandedProductId, setExpandedProductId, addCostForm, setAddCostForm, newComponentForm, setNewComponentForm, handleUpdateRule, handleMarkRuleConfirmed, toggleListingPlatform, setListingPrice, toggleListingCost, openEditProduct, closeProductForm, handleSubmitProduct, handleDeactivateProduct, getMarginDeps, handleAddCostToListing, handleRemoveCostFromListing, handleCreateCostComponent, availableCategories, displayedProducts }) {
+export function ProdutosTab({ products, setProducts, platforms, feeRules, listings, costComponents, listingCostComponents, operationPeople = [], productPeople = [], monthlyOperationCosts = [], productMonthlyOperationCosts = [], userRole, showNewProduct, setShowNewProduct, editingProductId, setEditingProductId, selectedPlatform, setSelectedPlatform, searchText, setSearchText, categoryFilter, setCategoryFilter, statusFilter, setStatusFilter, editRuleForm, setEditRuleForm, newProduct, setNewProduct, newListings, setNewListings, expandedProductId, setExpandedProductId, addCostForm, setAddCostForm, newComponentForm, setNewComponentForm, handleUpdateRule, handleMarkRuleConfirmed, toggleListingPlatform, setListingPrice, toggleListingCost, openEditProduct, closeProductForm, handleSubmitProduct, handleDeactivateProduct, getMarginDeps, handleAddCostToListing, handleRemoveCostFromListing, handleCreateCostComponent, availableCategories, displayedProducts }) {
+  const monthlyAllocation = useMemo(
+    () => allocateMonthlyCostsByProduct({
+      products,
+      people: operationPeople,
+      productPeople,
+      monthlyCosts: monthlyOperationCosts,
+      productMonthlyCosts: productMonthlyOperationCosts,
+    }),
+    [products, operationPeople, productPeople, monthlyOperationCosts, productMonthlyOperationCosts],
+  )
+
+  function money(value) {
+    return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  }
+
   return (
     <>
         <>
@@ -104,7 +120,7 @@ export function ProdutosTab({ products, setProducts, platforms, feeRules, listin
                     {selectedPlatform !== 'all' && (
                       <>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Preço venda</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Margem Líq.</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contribuição</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">% Margem</th>
                       </>
                     )}
@@ -258,6 +274,11 @@ export function ProdutosTab({ products, setProducts, platforms, feeRules, listin
                                   }
 
                                   const m = computeMargin(product, platform.id, getMarginDeps())
+                                  const predictability = calculateProductPredictability(
+                                    m,
+                                    monthlyAllocation.get(String(product.id)),
+                                    10,
+                                  )
                                   const isEstimate =
                                     m.status === 'ok' &&
                                     (m.rule.source_url?.toUpperCase().includes('ESTIMATIVA') ||
@@ -334,12 +355,29 @@ export function ProdutosTab({ products, setProducts, platforms, feeRules, listin
                                               </div>
                                             ))}
                                             <div className="flex justify-between font-semibold text-gray-900 border-t pt-1 mt-1">
-                                              <span>Margem líquida</span>
+                                              <span>Margem de contribuição</span>
                                               <span>
                                                 R$ {m.netMargin.toFixed(2)} ({m.marginPct.toFixed(1)}%)
                                               </span>
                                             </div>
                                           </div>
+
+                                          {predictability.monthlyFixed > 0 && (
+                                            <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-950">
+                                              <div className="mb-2 font-semibold">Previsibilidade deste SKU</div>
+                                              <div className="grid grid-cols-2 gap-2">
+                                                <div><span className="text-blue-600">Custos mensais rateados</span><div className="font-bold">{money(predictability.monthlyFixed)}</div></div>
+                                                <div><span className="text-blue-600">Impacto na meta</span><div className="font-bold">{predictability.targetUnits ? money(predictability.fixedCostPerUnitAtTarget) + '/un.' : 'Meta inviável'}</div></div>
+                                                <div><span className="text-blue-600">Mínimo para se pagar</span><div className="font-bold">{predictability.breakEvenUnits ?? '—'} un./mês</div></div>
+                                                <div><span className="text-blue-600">Meta com 10% líquido</span><div className="font-bold">{predictability.targetUnits ?? '—'} un./mês</div></div>
+                                              </div>
+                                              {predictability.paidTrafficBudget > 0 && (
+                                                <div className="mt-2 border-t border-blue-200 pt-2">
+                                                  Tráfego rateado: <strong>{money(predictability.paidTrafficBudget)}/mês</strong> · ROAS mínimo: <strong>{predictability.breakEvenRoas?.toFixed(2) ?? '—'}</strong> · ROAS para 10%: <strong>{predictability.targetRoas?.toFixed(2) ?? '—'}</strong>
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
 
                                           {/* Edição de taxa — só super_admin, afeta todas as empresas que usam essa regra */}
                                           {userRole === 'super_admin' && (
