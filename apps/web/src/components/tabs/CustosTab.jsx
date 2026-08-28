@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { calculateOperationPeopleAnalytics } from '../../lib/peopleAnalytics'
+import { PageHeader } from '../ui/PageHeader'
 
 const EMPTY_PERSON = {
   name: '',
@@ -371,6 +372,7 @@ export function CustosTab({
 
   return (
     <div className="space-y-8">
+      <PageHeader eyebrow="Planejamento mensal" title="Custos e operação" description="Reúna equipe, estrutura, marketing e custos por venda. O MargemHub distribui os valores e transforma tudo em metas para o negócio." />
       <section>
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>

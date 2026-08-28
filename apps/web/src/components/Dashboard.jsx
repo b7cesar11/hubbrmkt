@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { AlertCircle } from 'lucide-react'
 import { computeMargin, getListing } from '../lib/margin'
@@ -11,6 +11,8 @@ import { RegrasTab } from './tabs/RegrasTab'
 import { CustosTab } from './tabs/CustosTab'
 import { UsuariosTab } from './tabs/UsuariosTab'
 import { ConexoesTab } from './tabs/ConexoesTab'
+import { AppShell } from './layout/AppShell'
+import { ToastCenter } from './ui/ToastCenter'
 
 export default function Dashboard({ user, onLogout }) {
   const {
@@ -56,7 +58,9 @@ export default function Dashboard({ user, onLogout }) {
   })
   const [editingCostComponentId, setEditingCostComponentId] = useState(null)
   const [editCostComponentForm, setEditCostComponentForm] = useState({})
-  const [activeTab, setActiveTab] = useState('visao_geral') // visao_geral | produtos | regras | promocoes
+  const [activeTab, setActiveTab] = useState(
+    () => new URLSearchParams(window.location.search).get('area') || 'visao_geral',
+  )
   // Form de nova regra de taxa (do zero, ou resolvendo uma lacuna)
   const [showNewRuleForm, setShowNewRuleForm] = useState(false)
   const [resolvingGapId, setResolvingGapId] = useState(null)
@@ -92,6 +96,41 @@ export default function Dashboard({ user, onLogout }) {
   const [addCostForm, setAddCostForm] = useState({})
   // Form de "criar novo tipo de custo" — { [listingId]: { show, name, category, calc_type, default_value } }
   const [newComponentForm, setNewComponentForm] = useState({})
+  const [messages, setMessages] = useState([])
+
+  useEffect(() => {
+    const originalAlert = window.alert
+    window.alert = (message) => {
+      const text = String(message)
+      const id = `${Date.now()}-${Math.random()}`
+      const type = /erro|não foi possível|preencha|informe/i.test(text) ? 'error' : 'success'
+      setMessages((current) => [...current.slice(-2), { id, text, type }])
+      window.setTimeout(() => setMessages((current) => current.filter((item) => item.id !== id)), 5000)
+    }
+    return () => { window.alert = originalAlert }
+  }, [])
+
+  useEffect(() => {
+    const handleHistory = () => {
+      setActiveTab(new URLSearchParams(window.location.search).get('area') || 'visao_geral')
+    }
+    window.addEventListener('popstate', handleHistory)
+    return () => window.removeEventListener('popstate', handleHistory)
+  }, [])
+
+  function navigateTo(area, options = {}) {
+    setActiveTab(area)
+    if (options.productId) {
+      setExpandedProductId(options.productId)
+      setSearchText('')
+      setStatusFilter('all')
+    }
+    if (options.platformId) setSelectedPlatform(String(options.platformId))
+    const url = new URL(window.location.href)
+    url.searchParams.set('area', area)
+    window.history.pushState({}, '', `${url.pathname}${url.search}`)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
   async function handleUpdateRule(oldRule) {
     const form = editRuleForm[oldRule.id]
@@ -788,28 +827,8 @@ export default function Dashboard({ user, onLogout }) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">MargemHub</h1>
-              <p className="text-sm text-gray-500">Dashboard de Margens</p>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-600">{user.email}</span>
-              <button
-                onClick={onLogout}
-                className="text-sm text-red-600 hover:text-red-700 font-medium"
-              >
-                Sair
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <AppShell activeTab={activeTab} onNavigate={navigateTo} user={user} userRole={userRole} onLogout={onLogout}>
+        <ToastCenter messages={messages} onDismiss={(id) => setMessages((current) => current.filter((item) => item.id !== id))} />
         {userRole === 'super_admin' && coverageGaps.length > 0 && (
           <button
             onClick={() => setShowGaps(!showGaps)}
@@ -874,95 +893,6 @@ export default function Dashboard({ user, onLogout }) {
           </div>
         )}
 
-        <div className="mb-6 flex gap-1 border-b border-gray-200 overflow-x-auto whitespace-nowrap">
-            <button
-              onClick={() => setActiveTab('visao_geral')}
-              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'visao_geral'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Visão Geral
-            </button>
-            <button
-              onClick={() => setActiveTab('produtos')}
-              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'produtos'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Produtos
-            </button>
-            {userRole === 'super_admin' && (
-            <button
-              onClick={() => setActiveTab('regras')}
-              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'regras'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Regras de Taxa
-            </button>
-            )}
-            {userRole === 'super_admin' && (
-            <button
-              onClick={() => setActiveTab('promocoes')}
-              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'promocoes'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Promoções
-            </button>
-            )}
-            <button
-              onClick={() => setActiveTab('simulador')}
-              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'simulador'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Simulador
-            </button>
-            <button
-              onClick={() => setActiveTab('custos')}
-              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'custos'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Custos Adicionais
-            </button>
-            <button
-              onClick={() => setActiveTab('usuarios')}
-              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'usuarios'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Usuários
-            </button>
-            {(userRole === 'super_admin' || userRole === 'company_admin') && (
-            <button
-              onClick={() => setActiveTab('conexoes')}
-              className={`flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'conexoes'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Conexões
-            </button>
-            )}
-          </div>
-
         {activeTab === 'visao_geral' && (
           <VisaoGeralTab
             products={products}
@@ -975,11 +905,12 @@ export default function Dashboard({ user, onLogout }) {
             productMonthlyOperationCosts={productMonthlyOperationCosts}
             getMarginDeps={getMarginDeps}
             setShowGaps={setShowGaps}
+            onNavigate={navigateTo}
           />
         )}
 
         {activeTab === 'produtos' && (
-          <ProdutosTab products={products} setProducts={setProducts} platforms={platforms} feeRules={feeRules} listings={listings} costComponents={costComponents} listingCostComponents={listingCostComponents} operationPeople={operationPeople} productPeople={productPeople} monthlyOperationCosts={monthlyOperationCosts} productMonthlyOperationCosts={productMonthlyOperationCosts} userRole={userRole} showNewProduct={showNewProduct} setShowNewProduct={setShowNewProduct} editingProductId={editingProductId} setEditingProductId={setEditingProductId} selectedPlatform={selectedPlatform} setSelectedPlatform={setSelectedPlatform} searchText={searchText} setSearchText={setSearchText} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} editRuleForm={editRuleForm} setEditRuleForm={setEditRuleForm} newProduct={newProduct} setNewProduct={setNewProduct} newListings={newListings} setNewListings={setNewListings} expandedProductId={expandedProductId} setExpandedProductId={setExpandedProductId} addCostForm={addCostForm} setAddCostForm={setAddCostForm} newComponentForm={newComponentForm} setNewComponentForm={setNewComponentForm} handleUpdateRule={handleUpdateRule} handleMarkRuleConfirmed={handleMarkRuleConfirmed} toggleListingPlatform={toggleListingPlatform} setListingPrice={setListingPrice} toggleListingCost={toggleListingCost} openEditProduct={openEditProduct} closeProductForm={closeProductForm} handleSubmitProduct={handleSubmitProduct} handleDeactivateProduct={handleDeactivateProduct} getMarginDeps={getMarginDeps} handleAddCostToListing={handleAddCostToListing} handleRemoveCostFromListing={handleRemoveCostFromListing} handleCreateCostComponent={handleCreateCostComponent} availableCategories={availableCategories} displayedProducts={displayedProducts} />
+          <ProdutosTab products={products} setProducts={setProducts} platforms={platforms} feeRules={feeRules} listings={listings} costComponents={costComponents} listingCostComponents={listingCostComponents} operationPeople={operationPeople} productPeople={productPeople} monthlyOperationCosts={monthlyOperationCosts} productMonthlyOperationCosts={productMonthlyOperationCosts} userRole={userRole} showNewProduct={showNewProduct} setShowNewProduct={setShowNewProduct} editingProductId={editingProductId} setEditingProductId={setEditingProductId} selectedPlatform={selectedPlatform} setSelectedPlatform={setSelectedPlatform} searchText={searchText} setSearchText={setSearchText} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} editRuleForm={editRuleForm} setEditRuleForm={setEditRuleForm} newProduct={newProduct} setNewProduct={setNewProduct} newListings={newListings} setNewListings={setNewListings} expandedProductId={expandedProductId} setExpandedProductId={setExpandedProductId} addCostForm={addCostForm} setAddCostForm={setAddCostForm} newComponentForm={newComponentForm} setNewComponentForm={setNewComponentForm} handleUpdateRule={handleUpdateRule} handleMarkRuleConfirmed={handleMarkRuleConfirmed} toggleListingPlatform={toggleListingPlatform} setListingPrice={setListingPrice} toggleListingCost={toggleListingCost} openEditProduct={openEditProduct} closeProductForm={closeProductForm} handleSubmitProduct={handleSubmitProduct} handleDeactivateProduct={handleDeactivateProduct} getMarginDeps={getMarginDeps} handleAddCostToListing={handleAddCostToListing} handleRemoveCostFromListing={handleRemoveCostFromListing} handleCreateCostComponent={handleCreateCostComponent} availableCategories={availableCategories} displayedProducts={displayedProducts} onSimulate={(product, platformId) => { setSimProductId(product.id); setSimPlatformId(platformId); navigateTo('simulador') }} />
         )}
 
         {activeTab === 'regras' && userRole === 'super_admin' && (
@@ -1014,7 +945,6 @@ export default function Dashboard({ user, onLogout }) {
         {activeTab === 'conexoes' && (userRole === 'super_admin' || userRole === 'company_admin') && (
           <ConexoesTab companyId={companyId} userRole={userRole} />
         )}
-      </main>
-    </div>
+    </AppShell>
   )
 }

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { computeMargin, getListing } from '../../lib/margin'
 import { getPricingRecommendations } from '../../lib/pricing'
 import { AccountComparisonPanel } from '../AccountComparisonPanel'
+import { PageHeader } from '../ui/PageHeader'
 
 function money(value) {
   return Number(value || 0).toLocaleString('pt-BR', {
@@ -51,14 +52,9 @@ export function SimuladorTab({
 
   return (
     <div>
-      <div className="mb-4">
-        <h2 className="text-xl font-semibold text-gray-900">Simulador de Rentabilidade</h2>
-        <p className="mt-1 text-sm text-gray-500">
-          Descubra preço mínimo, preço para margem alvo e compare a rentabilidade de cada conta/canal.
-        </p>
-      </div>
+      <PageHeader eyebrow="Tomada de decisão" title="Simulador de rentabilidade" description="Descubra o preço mínimo, teste sua margem alvo e compare a rentabilidade entre contas e canais." />
 
-      <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+      <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
           <select
             value={simProductId}

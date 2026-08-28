@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertCircle, CheckCircle2, RefreshCw, Store } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { PageHeader } from '../ui/PageHeader'
 
 const SHOPEE = 'Shopee'
 const TIKTOK = 'TikTok Shop'
@@ -170,14 +171,7 @@ export function ConexoesTab({ companyId, userRole }) {
 
   return (
     <div>
-      <div className="mb-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900">Contas de marketplace</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            Pré-cadastre cada operação. O tipo e os programas da conta determinam qual tabela oficial entra no cálculo.
-          </p>
-        </div>
-        <div className="flex gap-3">
+      <PageHeader eyebrow="Operação multicanal" title="Contas de marketplace" description="Organize cada operação. O tipo e os programas da conta determinam qual tabela oficial entra no cálculo." actions={<>
           <button onClick={loadData} className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
           </button>
@@ -186,8 +180,7 @@ export function ConexoesTab({ companyId, userRole }) {
               + Nova conta
             </button>
           )}
-        </div>
-      </div>
+        </>} />
 
       <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
         <strong>Política de cálculo atual:</strong> somente regras oficiais confirmadas entram na margem. Se uma fonte pública não expõe a fórmula exata, o MargemHub sinaliza a pendência em vez de estimar.
