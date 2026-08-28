@@ -4,8 +4,9 @@ import { Plus, Trash2, Pencil, Package, TrendingUp, AlertCircle } from 'lucide-r
 import { computeMargin, getListing } from '../../lib/margin'
 import { supabase } from '../../lib/supabase'
 import { allocateMonthlyCostsByProduct, calculateProductPredictability } from '../../lib/predictability'
+import { PageHeader } from '../ui/PageHeader'
 
-export function ProdutosTab({ products, setProducts, platforms, feeRules, listings, costComponents, listingCostComponents, operationPeople = [], productPeople = [], monthlyOperationCosts = [], productMonthlyOperationCosts = [], userRole, showNewProduct, setShowNewProduct, editingProductId, setEditingProductId, selectedPlatform, setSelectedPlatform, searchText, setSearchText, categoryFilter, setCategoryFilter, statusFilter, setStatusFilter, editRuleForm, setEditRuleForm, newProduct, setNewProduct, newListings, setNewListings, expandedProductId, setExpandedProductId, addCostForm, setAddCostForm, newComponentForm, setNewComponentForm, handleUpdateRule, handleMarkRuleConfirmed, toggleListingPlatform, setListingPrice, toggleListingCost, openEditProduct, closeProductForm, handleSubmitProduct, handleDeactivateProduct, getMarginDeps, handleAddCostToListing, handleRemoveCostFromListing, handleCreateCostComponent, availableCategories, displayedProducts }) {
+export function ProdutosTab({ products, setProducts, platforms, feeRules, listings, costComponents, listingCostComponents, operationPeople = [], productPeople = [], monthlyOperationCosts = [], productMonthlyOperationCosts = [], userRole, showNewProduct, setShowNewProduct, editingProductId, setEditingProductId, selectedPlatform, setSelectedPlatform, searchText, setSearchText, categoryFilter, setCategoryFilter, statusFilter, setStatusFilter, editRuleForm, setEditRuleForm, newProduct, setNewProduct, newListings, setNewListings, expandedProductId, setExpandedProductId, addCostForm, setAddCostForm, newComponentForm, setNewComponentForm, handleUpdateRule, handleMarkRuleConfirmed, toggleListingPlatform, setListingPrice, toggleListingCost, openEditProduct, closeProductForm, handleSubmitProduct, handleDeactivateProduct, getMarginDeps, handleAddCostToListing, handleRemoveCostFromListing, handleCreateCostComponent, availableCategories, displayedProducts, onSimulate }) {
   const monthlyAllocation = useMemo(
     () => allocateMonthlyCostsByProduct({
       products,
@@ -24,20 +25,15 @@ export function ProdutosTab({ products, setProducts, platforms, feeRules, listin
   return (
     <>
         <>
-        <div className="mb-4 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
-          <div className="flex items-center gap-3">
-            <Package className="w-6 h-6 text-blue-600" />
-            <h2 className="text-xl font-semibold text-gray-900">Produtos</h2>
-            <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
-              {displayedProducts.length}
-            </span>
-          </div>
-
-          <div className="flex gap-3">
+        <PageHeader
+          eyebrow="Catálogo e canais"
+          title="Produtos e margens"
+          description={`${displayedProducts.length} produto${displayedProducts.length === 1 ? '' : 's'} no resultado atual. Compare preços, margens e metas por marketplace.`}
+          actions={<>
             <select
               value={selectedPlatform}
               onChange={(e) => setSelectedPlatform(e.target.value)}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+              className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm focus:border-transparent focus:ring-2 focus:ring-blue-500 sm:w-auto"
             >
               <option value="all">Todas as plataformas</option>
               {platforms.map((p) => (
@@ -51,13 +47,13 @@ export function ProdutosTab({ products, setProducts, platforms, feeRules, listin
                 setEditingProductId(null)
                 setShowNewProduct(true)
               }}
-              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-700 sm:w-auto"
             >
               <Plus className="w-4 h-4" />
               Novo Produto
             </button>
-          </div>
-        </div>
+          </>}
+        />
 
         <div className="mb-6 flex flex-col sm:flex-row gap-3">
           <input
@@ -108,8 +104,31 @@ export function ProdutosTab({ products, setProducts, platforms, feeRules, listin
             </button>
           </div>
         ) : (
-          <div className="bg-white rounded-xl shadow-md overflow-hidden">
-            <div className="overflow-x-auto">
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="divide-y divide-slate-100 md:hidden">
+              {displayedProducts.map((product) => {
+                const margin = selectedPlatform !== 'all'
+                  ? computeMargin(product, selectedPlatform, getMarginDeps())
+                  : null
+                const productListings = listings.filter(
+                  (listing) => String(listing.product_id) === String(product.id) && listing.active !== false,
+                )
+                return (
+                  <article key={product.id} className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0"><div className="flex items-center gap-2"><span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">{product.sku}</span>{!product.active && <span className="text-[10px] font-medium text-red-600">Inativo</span>}</div><h3 className="mt-2 truncate font-semibold text-slate-900">{product.name}</h3><p className="mt-1 text-xs text-slate-500">{product.category} · {productListings.length} conta{productListings.length === 1 ? '' : 's'}</p></div>
+                      <button type="button" onClick={() => openEditProduct(product)} aria-label={`Editar ${product.name}`} className="rounded-lg border border-slate-200 p-2 text-blue-600"><Pencil className="h-4 w-4" /></button>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3">
+                      <div><p className="text-[10px] uppercase tracking-wide text-slate-400">Custo</p><p className="mt-1 text-sm font-semibold text-slate-800">{money(product.cost_price)}</p></div>
+                      <div><p className="text-[10px] uppercase tracking-wide text-slate-400">Margem no filtro</p>{selectedPlatform === 'all' ? <p className="mt-1 text-xs text-slate-500">Escolha uma plataforma</p> : margin?.status === 'ok' ? <p className={`mt-1 text-sm font-semibold ${margin.marginPct > 10 ? 'text-emerald-700' : margin.marginPct > 0 ? 'text-amber-700' : 'text-red-700'}`}>{margin.marginPct.toFixed(1)}% · {money(margin.netMargin)}</p> : <p className="mt-1 text-xs text-amber-700">Previsão incompleta</p>}</div>
+                    </div>
+                    {productListings.length > 0 && <button type="button" onClick={() => onSimulate(product, selectedPlatform !== 'all' ? selectedPlatform : productListings[0].platform_id)} className="mt-3 w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm font-semibold text-blue-700">Simular preço e margem</button>}
+                  </article>
+                )
+              })}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
