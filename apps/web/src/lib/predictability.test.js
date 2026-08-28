@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { allocateMonthlyCostsByProduct, calculateProductPredictability } from './predictability'
+import {
+  allocateMonthlyCostsByProduct,
+  buildBusinessPredictability,
+  calculateProductPredictability,
+} from './predictability'
 
 describe('predictability', () => {
   it('rateia R$ 3 mil igualmente entre 10 SKUs sem pedir previsão', () => {
@@ -35,5 +39,34 @@ describe('predictability', () => {
     )
     expect(result.status).toBe('meta_inviavel')
     expect(result.targetUnits).toBeNull()
+  })
+})
+
+describe('buildBusinessPredictability', () => {
+  it('consolida o negócio e divide o custo do SKU entre contas sem duplicar', () => {
+    const allocationByProduct = new Map([
+      ['p1', { team: 300, overhead: 200, paidTraffic: 500, total: 1000 }],
+    ])
+    const result = buildBusinessPredictability({
+      products: [{ id: 'p1', active: true }],
+      listings: [
+        { id: 'l1', product_id: 'p1', platform_id: 'mp', marketplace_account_id: 'a1', active: true },
+        { id: 'l2', product_id: 'p1', platform_id: 'mp', marketplace_account_id: 'a2', active: true },
+      ],
+      platforms: [{ id: 'mp', name: 'Mercado' }],
+      marketplaceAccounts: [
+        { id: 'a1', platform_id: 'mp', name: 'Principal' },
+        { id: 'a2', platform_id: 'mp', name: 'Secundária' },
+      ],
+      allocationByProduct,
+      calculateMargin: () => ({ status: 'ok', grossRevenue: 200, netMargin: 50 }),
+    })
+
+    expect(result.general.monthlyFixed).toBe(1000)
+    expect(result.general.breakEvenOrders).toBe(20)
+    expect(result.platforms[0].monthlyFixed).toBe(1000)
+    expect(result.accounts[0].monthlyFixed).toBe(500)
+    expect(result.accounts[1].monthlyFixed).toBe(500)
+    expect(result.accounts[0].breakEvenOrders).toBe(10)
   })
 })
