@@ -48,7 +48,7 @@ describe('people costs', () => {
     expect(personAppliesToProduct(PEOPLE[1], 'p3', LINKS)).toBe(true)
   })
 
-  it('allocates fixed monthly cost across projected units of applicable products', () => {
+  it('keeps the legacy volume helper available without injecting salary per sale', () => {
     expect(getPersonAllocationUnits(PEOPLE[0], LISTINGS, LINKS)).toBe(300)
     expect(getPersonAllocationUnits(PEOPLE[1], LISTINGS, LINKS)).toBe(600)
 
@@ -58,16 +58,7 @@ describe('people costs', () => {
       listings: LISTINGS,
     })
 
-    const fernandaFixed = artifacts.costComponents.find(
-      (component) => component.person_id === 'fernanda' && component.cost_part === 'fixed',
-    )
-    const brunoFixed = artifacts.costComponents.find(
-      (component) => component.person_id === 'bruno' && component.cost_part === 'fixed',
-    )
-
-    expect(fernandaFixed.default_value).toBeCloseTo(10, 8)
-    expect(brunoFixed.default_value).toBeCloseTo(2.5, 8)
-    expect(fernandaFixed.allocation_pending).toBe(false)
+    expect(artifacts.costComponents.some((component) => component.cost_part === 'fixed')).toBe(false)
   })
 
   it('creates percentage commission components without duplicating salary records', () => {
@@ -89,16 +80,14 @@ describe('people costs', () => {
     expect(fernandaLinks.map((link) => link.product_listing_id).sort()).toEqual(['l1', 'l2'])
   })
 
-  it('marks fixed allocation as pending when no projected volume exists', () => {
+  it('does not require projected volume for monthly fixed costs', () => {
     const artifacts = buildPeopleCostArtifacts({
       people: [PEOPLE[0]],
       productPeople: [{ product_id: 'p1', person_id: 'fernanda' }],
       listings: [{ id: 'l1', product_id: 'p1', monthly_units_forecast: 0, active: true }],
     })
 
-    const fixed = artifacts.costComponents.find((component) => component.cost_part === 'fixed')
-    expect(fixed.default_value).toBe(0)
-    expect(fixed.allocation_pending).toBe(true)
-    expect(fixed.name).toContain('pendente')
+    expect(artifacts.costComponents).toHaveLength(1)
+    expect(artifacts.costComponents[0].cost_part).toBe('commission')
   })
 })

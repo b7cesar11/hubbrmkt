@@ -17,6 +17,8 @@ export function useDashboardData(user) {
   const [listingCostComponents, setListingCostComponents] = useState([])
   const [operationPeople, setOperationPeople] = useState([])
   const [productPeople, setProductPeople] = useState([])
+  const [monthlyOperationCosts, setMonthlyOperationCosts] = useState([])
+  const [productMonthlyOperationCosts, setProductMonthlyOperationCosts] = useState([])
   const [promotions, setPromotions] = useState([])
   const [companyUsers, setCompanyUsers] = useState([])
   const [coverageGaps, setCoverageGaps] = useState([])
@@ -59,6 +61,8 @@ export function useDashboardData(user) {
         listingCostComponentsRes,
         peopleRes,
         productPeopleRes,
+        monthlyCostsRes,
+        productMonthlyCostsRes,
         gapsRes,
         promotionsRes,
       ] = await Promise.all([
@@ -71,6 +75,8 @@ export function useDashboardData(user) {
         supabase.from('listing_cost_components').select('*'),
         supabase.from('operation_people').select('*').order('name', { ascending: true }),
         supabase.from('product_people').select('*'),
+        supabase.from('monthly_operation_costs').select('*').order('name', { ascending: true }),
+        supabase.from('product_monthly_operation_costs').select('*'),
         supabase.from('category_coverage_gaps').select('*').eq('status', 'pending_validation'),
         supabase.from('platform_promotions').select('*'),
       ])
@@ -84,6 +90,8 @@ export function useDashboardData(user) {
       if (listingCostComponentsRes.error) throw listingCostComponentsRes.error
       if (peopleRes.error) throw peopleRes.error
       if (productPeopleRes.error) throw productPeopleRes.error
+      if (monthlyCostsRes.error) throw monthlyCostsRes.error
+      if (productMonthlyCostsRes.error) throw productMonthlyCostsRes.error
       if (gapsRes.error) throw gapsRes.error
       if (promotionsRes.error) throw promotionsRes.error
 
@@ -113,6 +121,8 @@ export function useDashboardData(user) {
       setCoverageGaps(gapsRes.data || [])
       setOperationPeople(peopleRows)
       setProductPeople(productPeopleRows)
+      setMonthlyOperationCosts(monthlyCostsRes.data || [])
+      setProductMonthlyOperationCosts(productMonthlyCostsRes.data || [])
       setCostComponents([...manualCostComponents, ...peopleArtifacts.costComponents])
       setListingCostComponents([
         ...manualListingCostComponents,
@@ -155,6 +165,10 @@ export function useDashboardData(user) {
     setOperationPeople,
     productPeople,
     setProductPeople,
+    monthlyOperationCosts,
+    setMonthlyOperationCosts,
+    productMonthlyOperationCosts,
+    setProductMonthlyOperationCosts,
     promotions,
     setPromotions,
     companyUsers,
