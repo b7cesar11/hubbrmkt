@@ -17,6 +17,7 @@ export default function Dashboard({ user, onLogout }) {
     products,
     setProducts,
     platforms,
+    marketplaceAccounts,
     feeRules,
     setFeeRules,
     listings,
@@ -966,6 +967,12 @@ export default function Dashboard({ user, onLogout }) {
           <VisaoGeralTab
             products={products}
             platforms={platforms}
+            marketplaceAccounts={marketplaceAccounts}
+            listings={listings}
+            operationPeople={operationPeople}
+            productPeople={productPeople}
+            monthlyOperationCosts={monthlyOperationCosts}
+            productMonthlyOperationCosts={productMonthlyOperationCosts}
             getMarginDeps={getMarginDeps}
             setShowGaps={setShowGaps}
           />
